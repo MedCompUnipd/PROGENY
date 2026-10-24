@@ -1,0 +1,1766 @@
+# Migrated scientific stages run production implementations; remaining stages fail closed.
+# Invoke from the project root, or supply paths relative to --directory.
+from pathlib import Path
+
+from progeny.workflow.config import PipelineConfig, ROLES
+
+configfile: str(Path(workflow.basedir).parent / "config" / "pipeline.yaml")
+
+# Optional, evidence-only experiment. Keep PipelineConfig validation unchanged.
+BENCHMARK_VARIANT_SPEC = config.pop("benchmark_variant_spec", None)
+if BENCHMARK_VARIANT_SPEC is not None:
+    from progeny.stage08_variants import read_spec
+
+    BENCHMARK_VARIANT = read_spec(Path(BENCHMARK_VARIANT_SPEC))
+else:
+    BENCHMARK_VARIANT = None
+
+# Opt-in Stage 07 resolver experiments never replace canonical stage outputs.
+RESOLVER_VARIANT_SPEC = config.pop("resolver_variant_spec", None)
+if RESOLVER_VARIANT_SPEC is not None:
+    from progeny.stage07_variants import read_spec
+
+    RESOLVER_VARIANT = read_spec(Path(RESOLVER_VARIANT_SPEC))
+    config["resolver"] = RESOLVER_VARIANT["policy"]["resolver"]
+    config["annotation_donor"] = (
+        RESOLVER_VARIANT["policy"]["annotation_donor"]
+    )
+else:
+    RESOLVER_VARIANT = None
+
+# Optional Stage 2C discovery branch; never rewrites canonical Stage 03.
+S2C_SPEC_PATH = config.pop("stage2c_discovery_spec", None)
+if S2C_SPEC_PATH is not None:
+    from progeny.stage2c_discovery import read_plan
+
+    S2C_PLAN = read_plan(Path(S2C_SPEC_PATH))
+else:
+    S2C_PLAN = None
+
+# Independent FULL UniProt exact discovery; no resolver policy in this plan.
+S2C_FULL_SPEC_PATH = config.pop("stage2c_full_exact_spec", None)
+if S2C_FULL_SPEC_PATH is not None:
+    from progeny.stage2c_full_exact import read_plan as read_full_exact_plan
+
+    S2C_FULL_PLAN = read_full_exact_plan(Path(S2C_FULL_SPEC_PATH))
+else:
+    S2C_FULL_PLAN = None
+
+# Optional Stage 2C union (no donor-policy configuration).
+S2C_UNION_SPEC_PATH = config.pop("stage2c_union_spec", None)
+if S2C_UNION_SPEC_PATH is not None:
+    from progeny.stage2c_union_plan import read_plan as read_union_plan
+
+    S2C_UNION_PLAN = read_union_plan(Path(S2C_UNION_SPEC_PATH))
+else:
+    S2C_UNION_PLAN = None
+
+# Stage 2C evidence chain: opt-in; disabled for scientific execution by default.
+S2C_V2_SPEC_PATH = config.pop("stage2c_variant_spec", None)
+S2C_V2_EXECUTE = str(config.pop("stage2c_execute_variant", False)).lower() in {
+    "1", "yes", "true",
+}
+if S2C_V2_SPEC_PATH is not None:
+    from progeny.stage2c_workflow_plan import read_plan as read_stage2c_variant_plan
+
+    if S2C_UNION_PLAN is None:
+        raise ValueError("Stage 2C variant requires pinned shared discovery")
+    S2C_V2_PLAN = read_stage2c_variant_plan(Path(S2C_V2_SPEC_PATH))
+    if S2C_V2_PLAN["union_key"] != S2C_UNION_PLAN["key"]:
+        raise ValueError("Stage 2C variant and union plan mismatch")
+else:
+    S2C_V2_PLAN = None
+    if S2C_V2_EXECUTE:
+        raise ValueError("Stage 2C execution needs explicit variant plan")
+
+cfg = PipelineConfig.from_mapping(config)
+FINAL_STAGES = {"05A2", "05C2", "05R_POST", "06C1", "07", "08"}
+
+PROJECT_ROOT = Path(workflow.basedir).parent.resolve()
+
+STAGE07_CLI_SCRIPT = str(
+    PROJECT_ROOT / "scripts" / "pipeline" / "07_resolve_candidate_associations.py"
+)
+STAGE07_RUNNER_SCRIPT = str(PROJECT_ROOT / "workflow" / "scripts" / "run_stage_07.py")
+STAGE07_IMPLEMENTATION_MODULES = [
+    str(PROJECT_ROOT / "src" / "progeny" / name)
+    for name in (
+        "resolver.py",
+        "resolver_alignments.py",
+        "resolver_anchors.py",
+        "resolver_assembly.py",
+        "resolver_candidates.py",
+        "resolver_lineage.py",
+        "resolver_metadata.py",
+    )
+]
+
+STAGE08_CLI_SCRIPT = str(
+    PROJECT_ROOT / "scripts" / "pipeline" / "08_collect_annotations.py"
+)
+STAGE08_RUNNER_SCRIPT = str(PROJECT_ROOT / "workflow" / "scripts" / "run_stage_08.py")
+STAGE08_IMPLEMENTATION_MODULES = [
+    str(PROJECT_ROOT / "src" / "progeny" / name)
+    for name in (
+        "records.py",
+        "stage08_donors.py",
+        "stage08_annotations.py",
+        "stage08_collection_inputs.py",
+        "stage08_gaf_collection.py",
+        "stage08_collection_publish.py",
+        "workflow/artifacts.py",
+        "workflow/outcome.py",
+        "workflow/runtime.py",
+    )
+]
+
+DIRECT_ANCHOR_CLASSIFICATION_SCRIPT = str(
+    PROJECT_ROOT / "scripts" / "pipeline" / "04_classify_direct_anchors.py"
+)
+
+DIRECT_LINEAGE_KEYS_SCRIPT = str(
+    PROJECT_ROOT / "scripts" / "pipeline" / "04_compile_direct_lineage_keys.py"
+)
+
+PRIMARY_CANDIDATE_SCAN_BINARY = str(
+    PROJECT_ROOT
+    / ".pixi"
+    / "build"
+    / "progeny-native-release-gcc14.4"
+    / "progeny-primary-candidate-scan-v1"
+)
+PRIMARY_CANDIDATE_SCAN_BUILD_INPUTS = [
+    str(PROJECT_ROOT / "cpp" / "CMakeLists.txt"),
+    str(
+        PROJECT_ROOT
+        / "cpp"
+        / "src"
+        / "progeny_primary_candidate_scan_v1.cpp"
+    ),
+    str(PROJECT_ROOT / "pixi.toml"),
+    str(PROJECT_ROOT / "pixi.lock"),
+]
+
+DIRECT_ACCESSION_ANCHORS_BINARY = str(
+    PROJECT_ROOT
+    / ".pixi"
+    / "build"
+    / "progeny-native-release-gcc14.4"
+    / "progeny-direct-accession-anchors-v1"
+)
+DIRECT_ACCESSION_ANCHORS_BUILD_INPUTS = [
+    str(PROJECT_ROOT / "cpp" / "CMakeLists.txt"),
+    str(
+        PROJECT_ROOT
+        / "cpp"
+        / "src"
+        / "progeny_direct_accession_anchors_v1.cpp"
+    ),
+    str(PROJECT_ROOT / "pixi.toml"),
+    str(PROJECT_ROOT / "pixi.lock"),
+]
+ONEHOP_LINEAGE_SCAN_BINARY = str(
+    PROJECT_ROOT
+    / ".pixi"
+    / "build"
+    / "progeny-native-release-gcc14.4"
+    / "progeny-onehop-lineage-scan-v1"
+)
+
+ONEHOP_LINEAGE_SCAN_BUILD_INPUTS = [
+    str(PROJECT_ROOT / "cpp" / "CMakeLists.txt"),
+    str(
+        PROJECT_ROOT
+        / "cpp"
+        / "src"
+        / "progeny_onehop_lineage_scan_v1.cpp"
+    ),
+    str(PROJECT_ROOT / "pixi.toml"),
+    str(PROJECT_ROOT / "pixi.lock"),
+]
+
+
+CANDIDATE_SEQUENCE_EXTRACT_BINARY = str(
+    PROJECT_ROOT
+    / ".pixi"
+    / "build"
+    / "progeny-native-release-gcc14.4"
+    / "progeny-candidate-sequence-extract-v1"
+)
+CANDIDATE_SEQUENCE_EXTRACT_BUILD_INPUTS = [
+    str(PROJECT_ROOT / "cpp" / "CMakeLists.txt"),
+    str(
+        PROJECT_ROOT
+        / "cpp"
+        / "src"
+        / "progeny_candidate_sequence_extract_v1.cpp"
+    ),
+    str(PROJECT_ROOT / "pixi.toml"),
+    str(PROJECT_ROOT / "pixi.lock"),
+]
+
+RELEASE_FASTA_BINARY = str(
+    PROJECT_ROOT
+    / ".pixi"
+    / "build"
+    / "progeny-native-release-gcc14.4"
+    / "progeny-release-fasta-v2"
+)
+
+GOA_NORMALIZE_BINARY = str(
+    PROJECT_ROOT
+    / ".pixi"
+    / "build"
+    / "progeny-native-release-gcc14.4"
+    / "progeny-goa-normalize-v1"
+)
+
+GO_POSITIVE_FILTER_BINARY = str(
+    PROJECT_ROOT
+    / ".pixi"
+    / "build"
+    / "progeny-native-release-gcc14.4"
+    / "progeny-go-positive-filter-v1"
+)
+
+RAW_OX_EXTRACT_BINARY = str(
+    PROJECT_ROOT
+    / ".pixi"
+    / "build"
+    / "progeny-native-release-gcc14.4"
+    / "progeny-raw-ox-extract-v1"
+)
+
+TAXONOMY_CONTEXT_SCRIPT = str(
+    PROJECT_ROOT
+    / "scripts"
+    / "pipeline"
+    / "02_prepare_taxonomy_contexts.py"
+)
+
+TAXONOMY_MODULE = str(
+    PROJECT_ROOT
+    / "src"
+    / "progeny"
+    / "taxonomy.py"
+)
+
+
+FULL_OX_TAXONOMY_SCRIPT = str(
+    PROJECT_ROOT
+    / "scripts"
+    / "pipeline"
+    / "04D0_prepare_full_ox_taxonomy.py"
+)
+
+
+LINEAGE_SCAN_INDEX_SCRIPT = str(
+    PROJECT_ROOT
+    / "scripts"
+    / "pipeline"
+    / "04D1_prepare_lineage_scan_index.py"
+)
+
+
+LINEAGE_EVIDENCE_COLLAPSE_SCRIPT = str(
+    PROJECT_ROOT
+    / "scripts"
+    / "pipeline"
+    / "04E_collapse_lineage_evidence.py"
+)
+
+
+CANDIDATE_CHANNEL_UNION_SCRIPT = str(
+    PROJECT_ROOT
+    / "scripts"
+    / "pipeline"
+    / "05A_union_candidate_channels.py"
+)
+
+
+UNCOVERED_TARGET_AUDIT_SCRIPT = str(
+    PROJECT_ROOT
+    / "scripts"
+    / "pipeline"
+    / "05B_audit_uncovered_targets.py"
+)
+
+
+RESCUE_TARGET_PREPARATION_SCRIPT = str(
+    PROJECT_ROOT
+    / "scripts"
+    / "pipeline"
+    / "05R0_prepare_rescue_targets.py"
+)
+
+FINAL_CANDIDATE_UNION_SCRIPT = str(
+    PROJECT_ROOT / "scripts" / "pipeline" / "05A2_finalize_candidate_union.py"
+)
+
+FINAL_TAXONOMY_AUDIT_SCRIPT = str(
+    PROJECT_ROOT
+    / "scripts"
+    / "pipeline"
+    / "05C2_freeze_taxonomy_audit_channel.py"
+)
+
+POST_RESCUE_REPORT_SCRIPT = str(
+    PROJECT_ROOT
+    / "scripts"
+    / "pipeline"
+    / "05R_POST_report_unresolved_targets.py"
+)
+
+ALIGNMENT_JOBS_SCRIPT = str(
+    PROJECT_ROOT
+    / "scripts"
+    / "pipeline"
+    / "06A_prepare_alignment_jobs.py"
+)
+
+NONEXACT_SELECTION_SCRIPT = str(
+    PROJECT_ROOT
+    / "scripts"
+    / "pipeline"
+    / "NONEXACT_select_alignment_jobs.py"
+)
+
+
+
+
+
+
+NATIVE_BUILD_SHARED_INPUTS = [
+    str(PROJECT_ROOT / "cmake/ProgenyNativeRelease.cmake"),
+    str(PROJECT_ROOT / "scripts/installation/ensure_progeny_native_release.sh"),
+    str(PROJECT_ROOT / "cpp" / "CMakeLists.txt"),
+    str(PROJECT_ROOT / "pixi.toml"),
+    str(PROJECT_ROOT / "pixi.lock"),
+]
+
+RELEASE_FASTA_BUILD_INPUTS = [
+    *NATIVE_BUILD_SHARED_INPUTS,
+    str(PROJECT_ROOT / "cpp" / "src" / "progeny_release_fasta_v2.cpp"),
+]
+
+GOA_NORMALIZE_BUILD_INPUTS = [
+    *NATIVE_BUILD_SHARED_INPUTS,
+    str(PROJECT_ROOT / "cpp" / "src" / "progeny_goa_normalize_v1.cpp"),
+]
+
+GO_POSITIVE_FILTER_BUILD_INPUTS = [
+    *NATIVE_BUILD_SHARED_INPUTS,
+    str(PROJECT_ROOT / "cpp" / "src" / "progeny_go_positive_filter_v1.cpp"),
+]
+
+RAW_OX_EXTRACT_BUILD_INPUTS = [
+    *NATIVE_BUILD_SHARED_INPUTS,
+    str(PROJECT_ROOT / "cpp" / "src" / "progeny_raw_ox_extract_v1.cpp"),
+]
+
+
+def bundle(stage, role=None):
+    """Return the completion manifest tracked by Snakemake for a stage bundle."""
+    root = cfg.data["locations"]["output" if stage in FINAL_STAGES else "work"]
+    return str(
+        Path(root)
+        / (role or "common")
+        / stage
+        / "manifest.json"
+    )
+
+
+def stage_log(stage, role=None):
+    return str(Path(cfg.data["locations"]["logs"]) / (role or "common") / (stage + ".log"))
+
+
+def both(stage):
+    return [bundle(stage, role) for role in ROLES]
+
+
+wildcard_constraints:
+    role="START|END"
+
+DIRECTIONAL_GLOCAL_BINARY = str(
+    PROJECT_ROOT
+    / ".pixi"
+    / "build"
+    / "progeny-native-release-gcc14.4"
+    / "progeny-directional-glocal-full-dp-v1"
+)
+DIRECTIONAL_GLOCAL_BUILD_INPUTS = [
+    str(PROJECT_ROOT / "cpp" / "CMakeLists.txt"),
+    str(
+        PROJECT_ROOT
+        / "cpp"
+        / "src"
+        / "progeny_directional_glocal_full_dp_v1.cpp"
+    ),
+    str(PROJECT_ROOT / "pixi.toml"),
+    str(PROJECT_ROOT / "pixi.lock"),
+]
+
+FINALIZE_DIRECTIONAL_GLOCAL_SCRIPT = str(
+    PROJECT_ROOT
+    / "scripts"
+    / "pipeline"
+    / "06C1_finalize_directional_glocal.py"
+)
+
+rule all:
+    input:
+        bundle("06C1"),
+        bundle("05R_POST"),
+        bundle("07")
+
+if cfg.uses_adapter:
+    rule stage_00:
+        input:
+            cfg.target_inputs()
+        output:
+            bundle("00")
+        log:
+            stage_log("00")
+        params:
+            stage="00",
+            scientific=cfg.data["scientific"],
+            ontology=cfg.data["ontology"],
+            release_config=cfg.data["releases"],
+            target_contract=cfg.data["targets"]
+        threads:
+            cfg.resources("00")["threads"]
+        resources:
+            mem_mb=cfg.resources("00")["mem_mb"],
+            runtime=cfg.resources("00")["runtime_minutes"]
+        script:
+            "scripts/unimplemented_stage.py"
+
+rule build_release_fasta:
+    input:
+        RELEASE_FASTA_BUILD_INPUTS
+    output:
+        RELEASE_FASTA_BINARY
+    log:
+        stage_log("build-release-fasta")
+    params:
+        project_root=str(PROJECT_ROOT)
+    shell:
+        "mkdir -p \"$(dirname {log:q})\" && "
+        "(cd {params.project_root:q} && pixi run build-release-fasta) "
+        "> {log:q} 2>&1"
+
+rule build_goa_normalize:
+    input:
+        GOA_NORMALIZE_BUILD_INPUTS
+    output:
+        GOA_NORMALIZE_BINARY
+    log:
+        stage_log("build-goa-normalize")
+    params:
+        project_root=str(PROJECT_ROOT)
+    shell:
+        "mkdir -p \"$(dirname {log:q})\" && "
+        "(cd {params.project_root:q} && pixi run build-goa-normalize) "
+        "> {log:q} 2>&1"
+
+
+rule build_go_positive_filter:
+    input:
+        GO_POSITIVE_FILTER_BUILD_INPUTS
+    output:
+        GO_POSITIVE_FILTER_BINARY
+    log:
+        stage_log("build-go-positive-filter")
+    params:
+        project_root=str(PROJECT_ROOT)
+    shell:
+        "mkdir -p \"$(dirname {log:q})\" && "
+        "(cd {params.project_root:q} && pixi run build-go-positive-filter) "
+        "> {log:q} 2>&1"
+
+
+rule build_raw_ox_extract:
+    input:
+        RAW_OX_EXTRACT_BUILD_INPUTS
+    output:
+        RAW_OX_EXTRACT_BINARY
+    log:
+        stage_log("build-raw-ox-extract")
+    params:
+        project_root=str(PROJECT_ROOT)
+    shell:
+        "mkdir -p \"$(dirname {log:q})\" && "
+        "(cd {params.project_root:q} && pixi run build-raw-ox-extract) "
+        "> {log:q} 2>&1"
+
+
+rule stage_01:
+    input:
+        sources=([bundle("00")] if cfg.uses_adapter else cfg.target_inputs())
+    output:
+        bundle("01")
+    log:
+        stage_log("01")
+    params:
+        stage="01",
+        target_mode=cfg.data["targets"]["mode"],
+        target_policy=cfg.data["scientific"]["target_policy"]
+    threads:
+        cfg.resources("01")["threads"]
+    resources:
+        mem_mb=cfg.resources("01")["mem_mb"],
+        runtime=cfg.resources("01")["runtime_minutes"]
+    script:
+        "scripts/run_stage_01.py"
+
+rule stage_01A_FULL:
+    input:
+        sources=lambda w: cfg.release(w.role)["uniprot_sources"],
+        binary=RELEASE_FASTA_BINARY
+    output:
+        bundle("01A_FULL", "{role}")
+    log:
+        stage_log("01A_FULL", "{role}")
+    params:
+        stage="01A_FULL",
+        release_id=lambda w: cfg.release(w.role)["release_id"]
+    threads:
+        cfg.resources("01A_FULL")["threads"]
+    resources:
+        mem_mb=cfg.resources("01A_FULL")["mem_mb"],
+        runtime=cfg.resources("01A_FULL")["runtime_minutes"]
+    script:
+        "scripts/run_stage_01A_FULL.py"
+
+rule stage_01B0:
+    input:
+        owl=cfg.data["ontology"]["path"]
+    output:
+        bundle("01B0")
+    log:
+        stage_log("01B0")
+    params:
+        stage="01B0",
+        go_policy=cfg.data["scientific"]["go_policy"],
+        ontology=cfg.data["ontology"]
+    threads:
+        cfg.resources("01B0")["threads"]
+    resources:
+        mem_mb=cfg.resources("01B0")["mem_mb"],
+        runtime=cfg.resources("01B0")["runtime_minutes"]
+    script:
+        "scripts/run_stage_01B0.py"
+
+rule stage_01B1:
+    input:
+        goa=lambda w: cfg.release(w.role)["goa"],
+        release_manifest=bundle("01A_FULL", "{role}"),
+        policy_manifest=bundle("01B0"),
+        binary=GOA_NORMALIZE_BINARY
+    output:
+        bundle("01B1", "{role}")
+    log:
+        stage_log("01B1", "{role}")
+    params:
+        stage="01B1"
+    threads:
+        cfg.resources("01B1")["threads"]
+    resources:
+        mem_mb=cfg.resources("01B1")["mem_mb"],
+        runtime=cfg.resources("01B1")["runtime_minutes"]
+    script:
+        "scripts/run_stage_01B1.py"
+
+
+rule stage_01C:
+    input:
+        release_manifest=bundle("01A_FULL", "{role}"),
+        positive_manifest=bundle("01B1", "{role}"),
+        binary=GO_POSITIVE_FILTER_BINARY
+    output:
+        bundle("01C", "{role}")
+    log:
+        stage_log("01C", "{role}")
+    params:
+        stage="01C"
+    threads:
+        cfg.resources("01C")["threads"]
+    resources:
+        mem_mb=cfg.resources("01C")["mem_mb"],
+        runtime=cfg.resources("01C")["runtime_minutes"]
+    script:
+        "scripts/run_stage_01C.py"
+
+
+rule stage_02A:
+    input:
+        source_manifest=bundle("01C", "{role}"),
+        binary=RAW_OX_EXTRACT_BINARY
+    output:
+        bundle("02A", "{role}")
+    log:
+        stage_log("02A", "{role}")
+    params:
+        stage="02A"
+    threads:
+        cfg.resources("02A")["threads"]
+    resources:
+        mem_mb=cfg.resources("02A")["mem_mb"],
+        runtime=cfg.resources("02A")["runtime_minutes"]
+    script:
+        "scripts/run_stage_02A.py"
+
+
+rule stage_02B:
+    input:
+        target_manifest=bundle("01"),
+        ox_manifest=bundle("02A", "{role}"),
+        nodes=lambda w: cfg.release(w.role)["taxonomy"]["nodes"],
+        names=lambda w: cfg.release(w.role)["taxonomy"]["names"],
+        merged=lambda w: cfg.release(w.role)["taxonomy"]["merged"],
+        delnodes=lambda w: cfg.release(w.role)["taxonomy"]["deleted"],
+        implementation_script=TAXONOMY_CONTEXT_SCRIPT,
+        taxonomy_module=TAXONOMY_MODULE
+    output:
+        bundle("02B", "{role}")
+    log:
+        stage_log("02B", "{role}")
+    params:
+        stage="02B",
+        snapshot_id=lambda w: cfg.release(w.role)["taxonomy"]["snapshot_id"]
+    threads:
+        cfg.resources("02B")["threads"]
+    resources:
+        mem_mb=cfg.resources("02B")["mem_mb"],
+        runtime=cfg.resources("02B")["runtime_minutes"]
+    script:
+        "scripts/run_stage_02B.py"
+
+
+rule build_primary_candidate_scan:
+    input:
+        PRIMARY_CANDIDATE_SCAN_BUILD_INPUTS
+    output:
+        PRIMARY_CANDIDATE_SCAN_BINARY
+    log:
+        stage_log("build-primary-candidate-scan")
+    params:
+        project_root=str(PROJECT_ROOT)
+    shell:
+        "mkdir -p \"$(dirname {log:q})\" && "
+        "(cd {params.project_root:q} && pixi run build-primary-candidate-scan) "
+        "> {log:q} 2>&1"
+
+
+rule stage_03:
+    input:
+        target_manifest=bundle("01"),
+        go_positive_manifest=bundle("01C", "{role}"),
+        taxonomy_manifest=bundle("02B", "{role}"),
+        binary=PRIMARY_CANDIDATE_SCAN_BINARY
+    output:
+        bundle("03", "{role}")
+    log:
+        stage_log("03", "{role}")
+    params:
+        stage="03",
+        candidate_policy=cfg.stage03_parameters()
+    threads:
+        cfg.resources("03")["threads"]
+    resources:
+        mem_mb=cfg.resources("03")["mem_mb"],
+        runtime=cfg.resources("03")["runtime_minutes"]
+    script:
+        "scripts/run_stage_03.py"
+
+rule build_direct_accession_anchors:
+    input:
+        DIRECT_ACCESSION_ANCHORS_BUILD_INPUTS
+    output:
+        DIRECT_ACCESSION_ANCHORS_BINARY
+    log:
+        stage_log("build-direct-accession-anchors")
+    params:
+        project_root=str(PROJECT_ROOT)
+    shell:
+        "mkdir -p \"$(dirname {log:q})\" && "
+        "(cd {params.project_root:q} && pixi run build-direct-accession-anchors) "
+        "> {log:q} 2>&1"
+
+
+rule stage_04A:
+    input:
+        target_manifest=bundle("01"),
+        full_manifest=bundle("01A_FULL", "{role}"),
+        binary=DIRECT_ACCESSION_ANCHORS_BINARY
+    output:
+        bundle("04A", "{role}")
+    log:
+        stage_log("04A", "{role}")
+    params:
+        stage="04A"
+    threads:
+        cfg.resources("04A")["threads"]
+    resources:
+        mem_mb=cfg.resources("04A")["mem_mb"],
+        runtime=cfg.resources("04A")["runtime_minutes"]
+    script:
+        "scripts/run_stage_04A.py"
+
+rule stage_04B:
+    input:
+        anchor_manifest=bundle("04A", "{role}"),
+        taxonomy_manifest=bundle("02B", "{role}"),
+        implementation_script=DIRECT_ANCHOR_CLASSIFICATION_SCRIPT,
+        taxonomy_module=TAXONOMY_MODULE
+    output:
+        bundle("04B", "{role}")
+    log:
+        stage_log("04B", "{role}")
+    params:
+        stage="04B",
+        classification_policy=cfg.stage04b_parameters()
+    threads:
+        cfg.resources("04B")["threads"]
+    resources:
+        mem_mb=cfg.resources("04B")["mem_mb"],
+        runtime=cfg.resources("04B")["runtime_minutes"]
+    script:
+        "scripts/run_stage_04B.py"
+
+
+rule stage_04C:
+    input:
+        target_manifest=bundle("01"),
+        start_anchor_manifest=bundle("04B", "START"),
+        end_anchor_manifest=bundle("04B", "END"),
+        implementation_script=DIRECT_LINEAGE_KEYS_SCRIPT
+    output:
+        bundle("04C")
+    log:
+        stage_log("04C")
+    params:
+        stage="04C"
+    threads:
+        cfg.resources("04C")["threads"]
+    resources:
+        mem_mb=cfg.resources("04C")["mem_mb"],
+        runtime=cfg.resources("04C")["runtime_minutes"]
+    script:
+        "scripts/run_stage_04C.py"
+
+
+rule stage_04D0a:
+    input:
+        source_manifest=bundle("01A_FULL", "{role}"),
+        binary=RAW_OX_EXTRACT_BINARY
+    output:
+        bundle("04D0a", "{role}")
+    log:
+        stage_log("04D0a", "{role}")
+    params:
+        stage="04D0a"
+    threads:
+        cfg.resources("04D0a")["threads"]
+    resources:
+        mem_mb=cfg.resources("04D0a")["mem_mb"],
+        runtime=cfg.resources("04D0a")["runtime_minutes"]
+    script:
+        "scripts/run_stage_04D0a.py"
+
+
+rule stage_04D0b:
+    input:
+        ox_manifest=bundle("04D0a", "{role}"),
+        taxonomy_manifest=bundle("02B", "{role}"),
+        implementation_script=FULL_OX_TAXONOMY_SCRIPT,
+        taxonomy_module=TAXONOMY_MODULE
+    output:
+        bundle("04D0b", "{role}")
+    log:
+        stage_log("04D0b", "{role}")
+    params:
+        stage="04D0b"
+    threads:
+        cfg.resources("04D0b")["threads"]
+    resources:
+        mem_mb=cfg.resources("04D0b")["mem_mb"],
+        runtime=cfg.resources("04D0b")["runtime_minutes"]
+    script:
+        "scripts/run_stage_04D0b.py"
+
+
+rule stage_04D1:
+    input:
+        target_manifest=bundle("01"),
+        keys_manifest=bundle("04C"),
+        start_anchor_manifest=bundle("04B", "START"),
+        end_anchor_manifest=bundle("04B", "END"),
+        start_taxonomy_manifest=bundle("02B", "START"),
+        end_taxonomy_manifest=bundle("02B", "END"),
+        implementation_script=LINEAGE_SCAN_INDEX_SCRIPT
+    output:
+        bundle("04D1")
+    log:
+        stage_log("04D1")
+    params:
+        stage="04D1"
+    threads:
+        cfg.resources("04D1")["threads"]
+    resources:
+        mem_mb=cfg.resources("04D1")["mem_mb"],
+        runtime=cfg.resources("04D1")["runtime_minutes"]
+    script:
+        "scripts/run_stage_04D1.py"
+
+
+rule build_onehop_lineage_scan:
+    input:
+        ONEHOP_LINEAGE_SCAN_BUILD_INPUTS
+    output:
+        ONEHOP_LINEAGE_SCAN_BINARY
+    log:
+        stage_log("build-onehop-lineage-scan")
+    params:
+        project_root=str(PROJECT_ROOT)
+    shell:
+        "mkdir -p \"$(dirname {log:q})\" && "
+        "(cd {params.project_root:q} && pixi run build-onehop-lineage-scan) "
+        "> {log:q} 2>&1"
+
+
+rule stage_04D2:
+    input:
+        index_manifest=bundle("04D1"),
+        taxonomy_manifest=bundle("04D0b", "{role}"),
+        full_manifest=bundle("01A_FULL", "{role}"),
+        binary=ONEHOP_LINEAGE_SCAN_BINARY
+    output:
+        bundle("04D2", "{role}")
+    log:
+        stage_log("04D2", "{role}")
+    params:
+        stage="04D2"
+    threads:
+        cfg.resources("04D2")["threads"]
+    resources:
+        mem_mb=cfg.resources("04D2")["mem_mb"],
+        runtime=cfg.resources("04D2")["runtime_minutes"]
+    script:
+        "scripts/run_stage_04D2.py"
+
+
+rule stage_04E:
+    input:
+        evidence_manifest=bundle("04D2", "{role}"),
+        implementation_script=LINEAGE_EVIDENCE_COLLAPSE_SCRIPT
+    output:
+        bundle("04E", "{role}")
+    log:
+        stage_log("04E", "{role}")
+    params:
+        stage="04E"
+    threads:
+        cfg.resources("04E")["threads"]
+    resources:
+        mem_mb=cfg.resources("04E")["mem_mb"],
+        runtime=cfg.resources("04E")["runtime_minutes"]
+    script:
+        "scripts/run_stage_04E.py"
+
+
+rule stage_05A:
+    input:
+        start_sequence_manifest=bundle("03", "START"),
+        end_sequence_manifest=bundle("03", "END"),
+        start_lineage_manifest=bundle("04E", "START"),
+        end_lineage_manifest=bundle("04E", "END"),
+        implementation_script=CANDIDATE_CHANNEL_UNION_SCRIPT
+    output:
+        bundle("05A")
+    log:
+        stage_log("05A")
+    params:
+        stage="05A"
+    threads:
+        cfg.resources("05A")["threads"]
+    resources:
+        mem_mb=cfg.resources("05A")["mem_mb"],
+        runtime=cfg.resources("05A")["runtime_minutes"]
+    script:
+        "scripts/run_stage_05A.py"
+
+
+rule stage_05B:
+    input:
+        targets_manifest=bundle("01"),
+        candidate_union_manifest=bundle("05A"),
+        start_anchor_manifest=bundle("04B", "START"),
+        end_anchor_manifest=bundle("04B", "END"),
+        implementation_script=UNCOVERED_TARGET_AUDIT_SCRIPT
+    output:
+        bundle("05B")
+    log:
+        stage_log("05B")
+    params:
+        stage="05B",
+        policy=cfg.stage05b_parameters()
+    threads:
+        cfg.resources("05B")["threads"]
+    resources:
+        mem_mb=cfg.resources("05B")["mem_mb"],
+        runtime=cfg.resources("05B")["runtime_minutes"]
+    script:
+        "scripts/run_stage_05B.py"
+
+rule stage_05R0:
+    input:
+        uncovered_manifest=bundle("05B"),
+        targets_manifest=bundle("01"),
+        target_taxonomy_manifest=bundle("02B", "{role}"),
+        implementation_script=RESCUE_TARGET_PREPARATION_SCRIPT
+    output:
+        bundle("05R0", "{role}")
+    log:
+        stage_log("05R0", "{role}")
+    params:
+        stage="05R0"
+    threads:
+        cfg.resources("05R0")["threads"]
+    resources:
+        mem_mb=cfg.resources("05R0")["mem_mb"],
+        runtime=cfg.resources("05R0")["runtime_minutes"]
+    script:
+        "scripts/run_stage_05R0.py"
+
+rule stage_05R1:
+    input:
+        rescue_manifest=bundle("05R0", "{role}"),
+        full_taxonomy_manifest=bundle("04D0b", "{role}"),
+        full_v2_manifest=bundle("01A_FULL", "{role}"),
+        binary=PRIMARY_CANDIDATE_SCAN_BINARY
+    output:
+        bundle("05R1", "{role}")
+    log:
+        stage_log("05R1", "{role}")
+    params:
+        stage="05R1",
+        candidate_policy=cfg.stage03_parameters()
+    threads:
+        cfg.resources("05R1")["threads"]
+    resources:
+        mem_mb=cfg.resources("05R1")["mem_mb"],
+        runtime=cfg.resources("05R1")["runtime_minutes"]
+    script:
+        "scripts/run_stage_05R1.py"
+
+rule stage_05A2:
+    input:
+        baseline_manifest=bundle("05A"),
+        start_rescue_manifest=bundle("05R1", "START"),
+        end_rescue_manifest=bundle("05R1", "END"),
+        implementation_script=FINAL_CANDIDATE_UNION_SCRIPT
+    output:
+        bundle("05A2")
+    log:
+        stage_log("05A2")
+    params:
+        stage="05A2"
+    threads:
+        cfg.resources("05A2")["threads"]
+    resources:
+        mem_mb=cfg.resources("05A2")["mem_mb"],
+        runtime=cfg.resources("05A2")["runtime_minutes"]
+    script:
+        "scripts/run_stage_05A2.py"
+
+rule stage_05C2:
+    input:
+        final_union_manifest=bundle("05A2"),
+        start_anchor_manifest=bundle("04B", "START"),
+        end_anchor_manifest=bundle("04B", "END"),
+        implementation_script=FINAL_TAXONOMY_AUDIT_SCRIPT
+    output:
+        bundle("05C2")
+    log:
+        stage_log("05C2")
+    params:
+        stage="05C2"
+    threads:
+        cfg.resources("05C2")["threads"]
+    resources:
+        mem_mb=cfg.resources("05C2")["mem_mb"],
+        runtime=cfg.resources("05C2")["runtime_minutes"]
+    script:
+        "scripts/run_stage_05C2.py"
+
+rule stage_05R_POST:
+    input:
+        uncovered_manifest=bundle("05B"),
+        start_r0_manifest=bundle("05R0", "START"),
+        end_r0_manifest=bundle("05R0", "END"),
+        start_r1_manifest=bundle("05R1", "START"),
+        end_r1_manifest=bundle("05R1", "END"),
+        final_union_manifest=bundle("05A2"),
+        taxonomy_audit_manifest=bundle("05C2"),
+        start_taxonomy_manifest=bundle("02B", "START"),
+        end_taxonomy_manifest=bundle("02B", "END"),
+        start_anchor_manifest=bundle("04B", "START"),
+        end_anchor_manifest=bundle("04B", "END"),
+        implementation_script=POST_RESCUE_REPORT_SCRIPT
+    output:
+        bundle("05R_POST")
+    log:
+        stage_log("05R_POST")
+    params:
+        stage="05R_POST"
+    threads:
+        cfg.resources("05R_POST")["threads"]
+    resources:
+        mem_mb=cfg.resources("05R_POST")["mem_mb"],
+        runtime=cfg.resources("05R_POST")["runtime_minutes"]
+    script:
+        "scripts/run_stage_05R_POST.py"
+
+
+rule build_candidate_sequence_extract:
+    input:
+        CANDIDATE_SEQUENCE_EXTRACT_BUILD_INPUTS
+    output:
+        CANDIDATE_SEQUENCE_EXTRACT_BINARY
+    log:
+        stage_log("build-candidate-sequence-extract")
+    params:
+        project_root=str(PROJECT_ROOT)
+    shell:
+        "mkdir -p \"$(dirname {log:q})\" && "
+        "(cd {params.project_root:q} && pixi run build-candidate-sequence-extract) "
+        "> {log:q} 2>&1"
+
+
+rule stage_05D:
+    input:
+        final_union_manifest=bundle("05A2"),
+        taxonomy_audit_manifest=bundle("05C2"),
+        full_v2_manifest=bundle("01A_FULL", "{role}"),
+        binary=CANDIDATE_SEQUENCE_EXTRACT_BINARY
+    output:
+        bundle("05D", "{role}")
+    log:
+        stage_log("05D", "{role}")
+    params:
+        stage="05D"
+    threads:
+        cfg.resources("05D")["threads"]
+    resources:
+        mem_mb=cfg.resources("05D")["mem_mb"],
+        runtime=cfg.resources("05D")["runtime_minutes"]
+    script:
+        "scripts/run_stage_05D.py"
+
+
+rule stage_06A:
+    input:
+        target_manifest=bundle("01"),
+        final_union_manifest=bundle("05A2"),
+        taxonomy_audit_manifest=bundle("05C2"),
+        start_store_manifest=bundle("05D", "START"),
+        end_store_manifest=bundle("05D", "END"),
+        implementation_script=ALIGNMENT_JOBS_SCRIPT
+    output:
+        bundle("06A")
+    log:
+        stage_log("06A")
+    params:
+        stage="06A"
+    threads:
+        cfg.resources("06A")["threads"]
+    resources:
+        mem_mb=cfg.resources("06A")["mem_mb"],
+        runtime=cfg.resources("06A")["runtime_minutes"]
+    script:
+        "scripts/run_stage_06A.py"
+
+
+rule stage_NONEXACT:
+    input:
+        alignment_manifest=bundle("06A"),
+        implementation_script=NONEXACT_SELECTION_SCRIPT
+    output:
+        bundle("NONEXACT")
+    log:
+        stage_log("NONEXACT")
+    params:
+        stage="NONEXACT"
+    threads:
+        cfg.resources("NONEXACT")["threads"]
+    resources:
+        mem_mb=cfg.resources("NONEXACT")["mem_mb"],
+        runtime=cfg.resources("NONEXACT")["runtime_minutes"]
+    script:
+        "scripts/run_stage_NONEXACT.py"
+
+
+rule build_directional_glocal_full_dp:
+    input:
+        DIRECTIONAL_GLOCAL_BUILD_INPUTS
+    output:
+        DIRECTIONAL_GLOCAL_BINARY
+    log:
+        stage_log("build-directional-glocal-full-dp")
+    params:
+        project_root=str(PROJECT_ROOT)
+    shell:
+        "mkdir -p \"$(dirname {log:q})\" && "
+        "(cd {params.project_root:q} && pixi run build-directional-glocal-full-dp) "
+        "> {log:q} 2>&1"
+
+
+rule stage_06C0:
+    input:
+        target_manifest=bundle("01"),
+        nonexact_manifest=bundle("NONEXACT"),
+        start_store_manifest=bundle("05D", "START"),
+        end_store_manifest=bundle("05D", "END"),
+        binary=DIRECTIONAL_GLOCAL_BINARY
+    output:
+        bundle("06C0")
+    log:
+        stage_log("06C0")
+    params:
+        stage="06C0",
+        alignment_policy=cfg.data["scientific"]["alignment"]
+    threads:
+        cfg.resources("06C0")["threads"]
+    resources:
+        mem_mb=cfg.resources("06C0")["mem_mb"],
+        runtime=cfg.resources("06C0")["runtime_minutes"]
+    script:
+        "scripts/run_stage_06C0.py"
+
+
+rule stage_06C1:
+    input:
+        alignment_manifest=bundle("06A"),
+        full_dp_manifest=bundle("06C0"),
+        implementation_script=FINALIZE_DIRECTIONAL_GLOCAL_SCRIPT
+    output:
+        bundle("06C1")
+    log:
+        stage_log("06C1")
+    params:
+        stage="06C1"
+    threads:
+        cfg.resources("06C1")["threads"]
+    resources:
+        mem_mb=cfg.resources("06C1")["mem_mb"],
+        runtime=cfg.resources("06C1")["runtime_minutes"]
+    script:
+        "scripts/run_stage_06C1.py"
+
+
+rule stage_07:
+    input:
+        targets_manifest=bundle("01"),
+        primary_manifest=bundle("05A2"),
+        audit_manifest=bundle("05C2"),
+        start_taxonomy_manifest=bundle("02B", "START"),
+        end_taxonomy_manifest=bundle("02B", "END"),
+        start_anchors_manifest=bundle("04B", "START"),
+        end_anchors_manifest=bundle("04B", "END"),
+        lineage_index_manifest=bundle("04D1"),
+        start_lineage_manifest=bundle("04D2", "START"),
+        end_lineage_manifest=bundle("04D2", "END"),
+        jobs_manifest=bundle("06A"),
+        alignments_manifest=bundle("06C1"),
+        implementation_script=STAGE07_CLI_SCRIPT,
+        runner_script=STAGE07_RUNNER_SCRIPT,
+        resolver_modules=STAGE07_IMPLEMENTATION_MODULES
+    output:
+        bundle("07")
+    log:
+        stage_log("07")
+    params:
+        work_root=cfg.data["locations"]["work"],
+        results_root=cfg.data["locations"]["output"],
+        publication_root=cfg.data["locations"]["output"],
+        start_release_id=cfg.release("START")["release_id"],
+        end_release_id=cfg.release("END")["release_id"],
+        stage07_policy=cfg.stage07_parameters()
+    threads:
+        cfg.resources("07")["threads"]
+    resources:
+        mem_mb=cfg.resources("07")["mem_mb"],
+        runtime=cfg.resources("07")["runtime_minutes"]
+    script:
+        "scripts/run_stage_07.py"
+
+
+rule stage_08:
+    input:
+        stage07_manifest=bundle("07"),
+        start_goa_manifest=bundle("01B1", "START"),
+        end_goa_manifest=bundle("01B1", "END"),
+        go_policy_manifest=bundle("01B0"),
+        implementation_script=STAGE08_CLI_SCRIPT,
+        runner_script=STAGE08_RUNNER_SCRIPT,
+        collection_modules=STAGE08_IMPLEMENTATION_MODULES
+    output:
+        bundle("08")
+    log:
+        stage_log("08")
+    params:
+        work_root=cfg.data["locations"]["work"],
+        results_root=cfg.data["locations"]["output"],
+        stage08_collection=cfg.stage08_collection_parameters()
+    threads:
+        cfg.resources("08")["threads"]
+    resources:
+        mem_mb=cfg.resources("08")["mem_mb"],
+        runtime=cfg.resources("08")["runtime_minutes"]
+    script:
+        "scripts/run_stage_08.py"
+
+
+# Opt-in M12 variants consume the *published* M10c manifest as a file.
+# No dependency edge to stage_07 or stage_08 is introduced here. All source
+# bundle identities are checked again by the immutable M12 publisher.
+if BENCHMARK_VARIANT is not None:
+    VARIANT_SOURCES = BENCHMARK_VARIANT["sources"]
+    VARIANT_REPO = Path(BENCHMARK_VARIANT["repo"])
+    VARIANT_BENCHMARK = str(
+        Path(BENCHMARK_VARIANT["benchmark"]) / "manifest.json"
+    )
+    VARIANT_STATISTICS = str(
+        Path(BENCHMARK_VARIANT["statistics"]) / "publication_manifest.json"
+    )
+    VARIANT_SPEC = str(BENCHMARK_VARIANT_SPEC)
+    VARIANT_LOG_ROOT = str(
+        Path(BENCHMARK_VARIANT_SPEC).parent
+    )
+
+    # Reuse published artifact files from other experiments without asking
+    # Snakemake to rerun their immutable producing rules.
+    if Path(VARIANT_BENCHMARK).is_file():
+        import hashlib
+        import json
+
+        with open(VARIANT_BENCHMARK, encoding="utf-8") as handle:
+            published = json.load(handle)
+        expected = BENCHMARK_VARIANT
+        source_hash = expected["source_hashes"]["m10c_manifest"]
+        from progeny.stage08_temporal_v2 import load_classes
+
+        registry, classes, _ = load_classes(
+            Path(expected["registry"]), Path(expected["policy"])
+        )
+        if (
+            published.get("policy_sha256") != expected["policy_sha256"]
+            or published.get("m10c_manifest_sha256") != source_hash
+            or published.get("registry_fingerprint") != registry.fingerprint
+            or published.get("class_fingerprint") != classes.digest
+            or published.get("ontology_sha256")
+            != expected["source_hashes"]["ontology"]
+            or published.get("start_release") != expected["releases"]["START"]
+            or published.get("end_release") != expected["releases"]["END"]
+        ):
+            raise ValueError("Existing variant benchmark provenance mismatch")
+
+    if Path(VARIANT_STATISTICS).is_file():
+        with open(VARIANT_STATISTICS, encoding="utf-8") as handle:
+            diagnostic = json.load(handle)
+        with open(VARIANT_BENCHMARK, "rb") as handle:
+            benchmark_manifest_hash = hashlib.sha256(handle.read()).hexdigest()
+        if diagnostic.get("benchmark_manifest_sha256") != benchmark_manifest_hash:
+            raise ValueError("Existing diagnostic references another benchmark")
+
+    if not Path(VARIANT_BENCHMARK).is_file():
+        rule publish_stage_08_benchmark_variant:
+            input:
+                m10c_manifest=VARIANT_SOURCES["m10c_manifest"],
+                m8_summary=VARIANT_SOURCES["m8_summary"],
+                original_targets=VARIANT_SOURCES["targets"],
+                stage01_targets=VARIANT_SOURCES["stage01"],
+                ontology=VARIANT_SOURCES["ontology"],
+                policy=BENCHMARK_VARIANT["policy"],
+                registry=BENCHMARK_VARIANT["registry"],
+                experiment_spec=VARIANT_SPEC,
+                cli=str(VARIANT_REPO / "scripts/pipeline/08_build_benchmark_v2.py"),
+                module=str(VARIANT_REPO / "src/progeny/stage08_temporal_v2.py"),
+                variant_module=str(VARIANT_REPO / "src/progeny/stage08_variants.py"),
+                runner=str(
+                    VARIANT_REPO
+                    / "workflow/scripts/run_stage_08_benchmark_variant.py"
+                )
+            output:
+                benchmark_manifest=VARIANT_BENCHMARK
+            log:
+                str(Path(VARIANT_LOG_ROOT) / "benchmark_execution.log")
+            params:
+                spec_path=VARIANT_SPEC
+            threads: 1
+            script:
+                "scripts/run_stage_08_benchmark_variant.py"
+
+    if not Path(VARIANT_STATISTICS).is_file():
+        rule publish_stage_08_diagnostics_variant:
+            input:
+                benchmark_manifest=VARIANT_BENCHMARK,
+                original_targets=VARIANT_SOURCES["targets"],
+                stage01_targets=VARIANT_SOURCES["stage01"],
+                experiment_spec=VARIANT_SPEC,
+                cli=str(VARIANT_REPO / "scripts/pipeline/08_profile_benchmark.py"),
+                variant_module=str(VARIANT_REPO / "src/progeny/stage08_variants.py"),
+                runner=str(
+                    VARIANT_REPO
+                    / "workflow/scripts/run_stage_08_diagnostics_variant.py"
+                )
+            output:
+                diagnostics_manifest=VARIANT_STATISTICS
+            log:
+                str(Path(VARIANT_LOG_ROOT) / "diagnostics_execution.log")
+            params:
+                spec_path=VARIANT_SPEC
+            threads: 1
+            script:
+                "scripts/run_stage_08_diagnostics_variant.py"
+
+    rule stage_08_variant_diagnostics:
+        input:
+            VARIANT_STATISTICS
+
+# Stage 07 resolver variants are separate immutable publications. Only the
+# opt-in variant targets are allowed by their manager; canonical rules are
+# excluded from its Snakemake DAG.
+if RESOLVER_VARIANT is not None:
+    from progeny.stage07_variants import verify_publications
+
+    RV = RESOLVER_VARIANT
+    verify_publications(RV)
+    RV_PATH = RV["paths"]
+    RV_SPEC = str(RESOLVER_VARIANT_SPEC)
+    RV_LOGS = str(
+        Path(RV["run"]) / "experiments" / RV["experiment_id"]
+    )
+
+    if not (Path(RV_PATH["stage07"]) / "manifest.json").is_file():
+        rule stage_07_resolver_variant:
+            input:
+                targets_manifest=bundle("01"),
+                primary_manifest=bundle("05A2"),
+                audit_manifest=bundle("05C2"),
+                start_taxonomy_manifest=bundle("02B", "START"),
+                end_taxonomy_manifest=bundle("02B", "END"),
+                start_anchors_manifest=bundle("04B", "START"),
+                end_anchors_manifest=bundle("04B", "END"),
+                lineage_index_manifest=bundle("04D1"),
+                start_lineage_manifest=bundle("04D2", "START"),
+                end_lineage_manifest=bundle("04D2", "END"),
+                jobs_manifest=bundle("06A"),
+                alignments_manifest=bundle("06C1"),
+                implementation_script=STAGE07_CLI_SCRIPT,
+                runner_script=STAGE07_RUNNER_SCRIPT,
+                resolver_modules=STAGE07_IMPLEMENTATION_MODULES
+            output:
+                str(Path(RV_PATH["stage07"]) / "manifest.json")
+            log:
+                str(Path(RV_LOGS) / "resolver_stage07.log")
+            params:
+                work_root=cfg.data["locations"]["work"],
+                results_root=cfg.data["locations"]["output"],
+                publication_root=cfg.data["locations"]["output"],
+                start_release_id=RV["releases"]["START"],
+                end_release_id=RV["releases"]["END"],
+                stage07_policy=RV["policy"],
+                resolver_variant_spec=RV_SPEC
+            threads:
+                cfg.resources("07")["threads"]
+            resources:
+                mem_mb=cfg.resources("07")["mem_mb"],
+                runtime=cfg.resources("07")["runtime_minutes"]
+            script:
+                "scripts/run_stage_07.py"
+
+    if not (Path(RV_PATH["stage08"]) / "manifest.json").is_file():
+        rule stage_08_resolver_variant:
+            input:
+                stage07_manifest=str(
+                    Path(RV_PATH["stage07"]) / "manifest.json"
+                ),
+                start_goa_manifest=bundle("01B1", "START"),
+                end_goa_manifest=bundle("01B1", "END"),
+                go_policy_manifest=bundle("01B0"),
+                spec=RV_SPEC
+            output:
+                stage08_manifest=str(
+                    Path(RV_PATH["stage08"]) / "manifest.json"
+                ),
+                stage08_summary=str(
+                    Path(RV_PATH["stage08"]) / "08_collection_summary.json"
+                )
+            log:
+                str(Path(RV_LOGS) / "resolver_stage08.log")
+            params:
+                spec_path=RV_SPEC
+            threads: 1
+            script:
+                "scripts/run_stage_08_resolver_variant.py"
+
+    if not (Path(RV_PATH["m10c"]) / "manifest.json").is_file():
+        rule stage_08_compact_resolver_variant:
+            input:
+                stage07_manifest=str(
+                    Path(RV_PATH["stage07"]) / "manifest.json"
+                ),
+                m8_manifest=str(
+                    Path(RV_PATH["stage08"]) / "manifest.json"
+                ),
+                spec=RV_SPEC
+            output:
+                str(Path(RV_PATH["m10c"]) / "manifest.json")
+            log:
+                str(Path(RV_LOGS) / "resolver_m10c.log")
+            params:
+                spec_path=RV_SPEC
+            threads: 1
+            script:
+                "scripts/run_stage_08_compact_resolver_variant.py"
+
+    if not (Path(RV_PATH["benchmark"]) / "manifest.json").is_file():
+        rule stage_08_benchmark_resolver_variant:
+            input:
+                m10c_manifest=str(
+                    Path(RV_PATH["m10c"]) / "manifest.json"
+                ),
+                m8_summary=str(
+                    Path(RV_PATH["stage08"]) / "08_collection_summary.json"
+                ),
+                spec=RV_SPEC
+            output:
+                str(Path(RV_PATH["benchmark"]) / "manifest.json")
+            log:
+                str(Path(RV_LOGS) / "resolver_m12.log")
+            params:
+                spec_path=RV_SPEC
+            threads: 1
+            script:
+                "scripts/run_stage_08_benchmark_resolver_variant.py"
+
+    if not (
+        Path(RV_PATH["diagnostics"]) / "publication_manifest.json"
+    ).is_file():
+        rule stage_08_diagnostics_resolver_variant:
+            input:
+                benchmark_manifest=str(
+                    Path(RV_PATH["benchmark"]) / "manifest.json"
+                ),
+                spec=RV_SPEC
+            output:
+                str(
+                    Path(RV_PATH["diagnostics"])
+                    / "publication_manifest.json"
+                )
+            log:
+                str(Path(RV_LOGS) / "resolver_diagnostics.log")
+            params:
+                spec_path=RV_SPEC
+            threads: 1
+            script:
+                "scripts/run_stage_08_diagnostics_resolver_variant.py"
+
+    rule stage_08_resolver_diagnostics:
+        input:
+            str(
+                Path(RV_PATH["diagnostics"]) / "publication_manifest.json"
+            )
+
+rule validate_artifacts:
+    input:
+        ([bundle("00")] if cfg.uses_adapter else []),
+        [bundle("01")],
+        both("01A_FULL"),
+        [bundle("01B0")],
+        both("01B1"),
+        both("01C"),
+        both("02A"),
+        both("02B"),
+        both("03"),
+        both("04A"),
+        both("04B"),
+        [bundle("04C")],
+        both("04D0a"),
+        both("04D0b"),
+        [bundle("04D1")],
+        both("04D2"),
+        both("04E"),
+        [bundle("05A")],
+        [bundle("05B")],
+        both("05R0"),
+        both("05R1"),
+        [bundle("05A2")],
+        [bundle("05C2")],
+        [bundle("05R_POST")],
+        both("05D"),
+        [bundle("06A")],
+        [bundle("NONEXACT")],
+        [bundle("06C0")],
+        [bundle("06C1")],
+        [bundle("07")],
+    log:
+        stage_log("validate_artifacts")
+    params:
+        deep=cfg.data["validation"]["deep_checksums"]
+    script:
+        "scripts/validate_bundles.py"
+
+
+# Stage 2C species-wide GO-positive discovery is an opt-in, isolated branch.
+# It does not yet include FULL UniProt exact matches or a downstream merge.
+if S2C_PLAN is not None:
+    S2C_BINARY = str(
+        PROJECT_ROOT
+        / ".pixi/build/progeny-native-release-gcc14.4"
+        / "progeny-primary-candidate-scan-v2"
+    )
+    S2C_BUILD_INPUTS = [
+        str(PROJECT_ROOT / "cpp/CMakeLists.txt"),
+        str(PROJECT_ROOT / "cpp/src/progeny_primary_candidate_scan_v2.cpp"),
+        str(PROJECT_ROOT / "pixi.toml"),
+        str(PROJECT_ROOT / "pixi.lock"),
+    ]
+
+    rule build_primary_candidate_scan_v2:
+        input:
+            S2C_BUILD_INPUTS
+        output:
+            S2C_BINARY
+        log:
+            str(Path(S2C_PLAN["run"]) / "logs/pipeline-v2/"
+                "build-primary-scan-v2.log")
+        params:
+            project_root=str(PROJECT_ROOT),
+            log_dir=str(Path(S2C_PLAN["run"]) / "logs/pipeline-v2")
+        shell:
+            "mkdir -p {params.log_dir:q} && "
+            "(cd {params.project_root:q} && "
+            "pixi run build-primary-candidate-scan-v2) "
+            "> {log:q} 2>&1"
+
+    rule stage_03_species_wide_START:
+        input:
+            target_manifest=bundle("01"),
+            go_positive_manifest=bundle("01C", "START"),
+            taxonomy_manifest=bundle("02B", "START"),
+            binary=S2C_BINARY
+        output:
+            str(Path(S2C_PLAN["paths"]["START"]) / "manifest.json")
+        log:
+            str(Path(S2C_PLAN["run"]) / "logs/pipeline-v2/"
+                f"species-wide-START-{S2C_PLAN['key'][:16]}.log")
+        params:
+            stage="03",
+            role="START",
+            plan_path=str(S2C_SPEC_PATH)
+        threads:
+            cfg.resources("03")["threads"]
+        resources:
+            mem_mb=cfg.resources("03")["mem_mb"],
+            runtime=cfg.resources("03")["runtime_minutes"]
+        script:
+            "scripts/run_stage_03_species_wide.py"
+
+    rule stage_03_species_wide_END:
+        input:
+            target_manifest=bundle("01"),
+            go_positive_manifest=bundle("01C", "END"),
+            taxonomy_manifest=bundle("02B", "END"),
+            binary=S2C_BINARY
+        output:
+            str(Path(S2C_PLAN["paths"]["END"]) / "manifest.json")
+        log:
+            str(Path(S2C_PLAN["run"]) / "logs/pipeline-v2/"
+                f"species-wide-END-{S2C_PLAN['key'][:16]}.log")
+        params:
+            stage="03",
+            role="END",
+            plan_path=str(S2C_SPEC_PATH)
+        threads:
+            cfg.resources("03")["threads"]
+        resources:
+            mem_mb=cfg.resources("03")["mem_mb"],
+            runtime=cfg.resources("03")["runtime_minutes"]
+        script:
+            "scripts/run_stage_03_species_wide.py"
+
+    rule stage_03_species_wide_both:
+        input:
+            str(Path(S2C_PLAN["paths"]["START"]) / "manifest.json"),
+            str(Path(S2C_PLAN["paths"]["END"]) / "manifest.json")
+
+# Stage 2C FULL exact discovery is a separate optional, immutable branch.
+# Unlike the GO-positive species-wide scanner, it reads pinned 01A_FULL.
+# Neither candidate discovery branch depends on the Stage 07 donor policy.
+if S2C_FULL_PLAN is not None:
+    S2C_FULL_BINARY = str(
+        PROJECT_ROOT
+        / ".pixi/build/progeny-native-release-gcc14.4"
+        / "progeny-full-exact-cross-strain-v1"
+    )
+    S2C_FULL_BUILD_INPUTS = [
+        str(PROJECT_ROOT / "cpp/CMakeLists.txt"),
+        str(PROJECT_ROOT / "cpp/src/progeny_full_exact_cross_strain_v1.cpp"),
+        str(PROJECT_ROOT / "pixi.toml"),
+        str(PROJECT_ROOT / "pixi.lock"),
+    ]
+
+    rule build_full_exact_cross_strain_v1:
+        input:
+            S2C_FULL_BUILD_INPUTS
+        output:
+            S2C_FULL_BINARY
+        log:
+            str(Path(S2C_FULL_PLAN["run"]) / "logs/pipeline-v2/"
+                "build-full-exact-cross-strain-v1.log")
+        params:
+            project_root=str(PROJECT_ROOT),
+            log_dir=str(Path(S2C_FULL_PLAN["run"]) / "logs/pipeline-v2")
+        shell:
+            "mkdir -p {params.log_dir:q} && "
+            "(cd {params.project_root:q} && "
+            "pixi run build-full-exact-cross-strain) "
+            "> {log:q} 2>&1"
+
+    rule stage_03_full_exact_START:
+        input:
+            target_manifest=bundle("01"),
+            full_manifest=bundle("01A_FULL", "START"),
+            taxonomy_manifest=bundle("02B", "START"),
+            ox_manifest=bundle("04D0b", "START"),
+            binary=S2C_FULL_BINARY
+        output:
+            str(Path(S2C_FULL_PLAN["paths"]["START"]) / "manifest.json")
+        log:
+            str(Path(S2C_FULL_PLAN["run"]) / "logs/pipeline-v2/"
+                f"full-exact-START-{S2C_FULL_PLAN['key'][:16]}.log")
+        params:
+            role="START",
+            plan_path=str(S2C_FULL_SPEC_PATH)
+        threads:
+            cfg.resources("03")["threads"]
+        resources:
+            mem_mb=cfg.resources("03")["mem_mb"],
+            runtime=cfg.resources("03")["runtime_minutes"]
+        script:
+            "scripts/run_stage_03_full_exact.py"
+
+    rule stage_03_full_exact_END:
+        input:
+            target_manifest=bundle("01"),
+            full_manifest=bundle("01A_FULL", "END"),
+            taxonomy_manifest=bundle("02B", "END"),
+            ox_manifest=bundle("04D0b", "END"),
+            binary=S2C_FULL_BINARY
+        output:
+            str(Path(S2C_FULL_PLAN["paths"]["END"]) / "manifest.json")
+        log:
+            str(Path(S2C_FULL_PLAN["run"]) / "logs/pipeline-v2/"
+                f"full-exact-END-{S2C_FULL_PLAN['key'][:16]}.log")
+        params:
+            role="END",
+            plan_path=str(S2C_FULL_SPEC_PATH)
+        threads:
+            cfg.resources("03")["threads"]
+        resources:
+            mem_mb=cfg.resources("03")["mem_mb"],
+            runtime=cfg.resources("03")["runtime_minutes"]
+        script:
+            "scripts/run_stage_03_full_exact.py"
+
+    rule stage_03_full_exact_both:
+        input:
+            str(Path(S2C_FULL_PLAN["paths"]["START"]) / "manifest.json"),
+            str(Path(S2C_FULL_PLAN["paths"]["END"]) / "manifest.json")
+
+# Stage 2C union: shared species-wide discovery independent of donor policy.
+# Scientific upstream branches remain pinned and are not overwritten.
+if S2C_UNION_PLAN is not None:
+    if S2C_PLAN is None or S2C_FULL_PLAN is None:
+        raise ValueError("Stage 2C union requires both discovery plans")
+    if (
+        S2C_UNION_PLAN["species_key"] != S2C_PLAN["key"]
+        or S2C_UNION_PLAN["full_key"] != S2C_FULL_PLAN["key"]
+        or S2C_UNION_PLAN["species_paths"] != S2C_PLAN["paths"]
+        or S2C_UNION_PLAN["full_paths"] != S2C_FULL_PLAN["paths"]
+    ):
+        raise ValueError("Stage 2C union/discovery plan mismatch")
+
+    rule stage_03_discovery_union_START:
+        input:
+            go_manifest=str(
+                Path(S2C_PLAN["paths"]["START"]) / "manifest.json"
+            ),
+            full_manifest=str(
+                Path(S2C_FULL_PLAN["paths"]["START"]) / "manifest.json"
+            ),
+            taxonomy_manifest=bundle("02B", "START")
+        output:
+            union_manifest=str(
+                Path(S2C_UNION_PLAN["paths"]["START"]) / "manifest.json"
+            ),
+            pairs=str(
+                Path(S2C_UNION_PLAN["paths"]["START"])
+                / "03_unified_discovery.tsv"
+            ),
+            summary=str(
+                Path(S2C_UNION_PLAN["paths"]["START"])
+                / "03_unified_discovery.summary.json"
+            )
+        log:
+            str(Path(S2C_UNION_PLAN["run"]) / "logs/pipeline-v2/"
+                f"discovery-union-START-{S2C_UNION_PLAN['key'][:16]}.log")
+        params:
+            role="START",
+            plan_path=str(S2C_UNION_SPEC_PATH)
+        threads: 1
+        script:
+            "scripts/run_stage_03_discovery_union.py"
+
+    rule stage_03_discovery_union_END:
+        input:
+            go_manifest=str(
+                Path(S2C_PLAN["paths"]["END"]) / "manifest.json"
+            ),
+            full_manifest=str(
+                Path(S2C_FULL_PLAN["paths"]["END"]) / "manifest.json"
+            ),
+            taxonomy_manifest=bundle("02B", "END")
+        output:
+            union_manifest=str(
+                Path(S2C_UNION_PLAN["paths"]["END"]) / "manifest.json"
+            ),
+            pairs=str(
+                Path(S2C_UNION_PLAN["paths"]["END"])
+                / "03_unified_discovery.tsv"
+            ),
+            summary=str(
+                Path(S2C_UNION_PLAN["paths"]["END"])
+                / "03_unified_discovery.summary.json"
+            )
+        log:
+            str(Path(S2C_UNION_PLAN["run"]) / "logs/pipeline-v2/"
+                f"discovery-union-END-{S2C_UNION_PLAN['key'][:16]}.log")
+        params:
+            role="END",
+            plan_path=str(S2C_UNION_SPEC_PATH)
+        threads: 1
+        script:
+            "scripts/run_stage_03_discovery_union.py"
+
+    rule stage_03_discovery_union_both:
+        input:
+            str(Path(S2C_UNION_PLAN["paths"]["START"]) / "manifest.json"),
+            str(Path(S2C_UNION_PLAN["paths"]["END"]) / "manifest.json")
+
+# Isolated Stage 2C evidence DAG. Canonical Stage 01--08 stays unchanged.
+if S2C_V2_PLAN is not None:
+    include: "stage2c_variants.smk"

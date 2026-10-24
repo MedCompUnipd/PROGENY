@@ -1,0 +1,8 @@
+{
+  "schema": "progeny-fresh-runtime-resources-v1",
+  "m8_workers": 2,
+  "temporal_workers": 8,
+  "m8_mem_mb": 8192,
+  "m10c_mem_mb": 16384,
+  "temporal_mem_mb": 32768
+}

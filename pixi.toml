@@ -1,0 +1,63 @@
+[workspace]
+name = "progeny"
+version = "0.1.0"
+description = "Development environment for PROGENY"
+authors = ["PROGENY contributors"]
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-64", "osx-arm64", "win-64"]
+
+[dependencies]
+python = ">=3.11,<3.14"
+rdflib = ">=7,<8"
+cmake = ">=3.20,<5"
+ninja = ">=1.11,<2"
+cxx-compiler = ">=1.7,<2"
+zlib = ">=1.3,<2"
+# Snakemake 9.27.0 requires packaging <26; avoid a conda/PyPI solve conflict.
+packaging = ">=24,<26"
+
+[pypi-dependencies]
+progeny-benchmark = { path = ".", editable = true }
+snakemake = "==9.27.0"
+
+[feature.dev.dependencies]
+pytest = ">=8.4.2,<9"
+ruff = ">=0.11,<1"
+
+[environments]
+default = ["dev"]
+
+[tasks]
+test = "pytest"
+lint = "ruff check ."
+format = "ruff format ."
+check = { depends-on = ["lint", "test"] }
+build-release-fasta = "bash scripts/installation/ensure_progeny_native_release.sh progeny-release-fasta-v2"
+release-fasta-v2 = ".pixi/build/progeny-native-release-gcc14.4/progeny-release-fasta-v2"
+build-goa-normalize = "bash scripts/installation/ensure_progeny_native_release.sh progeny-goa-normalize-v1"
+goa-normalize-v1 = ".pixi/build/progeny-native-release-gcc14.4/progeny-goa-normalize-v1"
+build-go-positive-filter = "bash scripts/installation/ensure_progeny_native_release.sh progeny-go-positive-filter-v1"
+go-positive-filter-v1 = ".pixi/build/progeny-native-release-gcc14.4/progeny-go-positive-filter-v1"
+build-raw-ox-extract = "bash scripts/installation/ensure_progeny_native_release.sh progeny-raw-ox-extract-v1"
+raw-ox-extract-v1 = ".pixi/build/progeny-native-release-gcc14.4/progeny-raw-ox-extract-v1"
+build-primary-candidate-scan = "bash scripts/installation/ensure_progeny_native_release.sh progeny-primary-candidate-scan-v1"
+primary-candidate-scan-v1 = ".pixi/build/progeny-native-release-gcc14.4/progeny-primary-candidate-scan-v1"
+build-primary-candidate-scan-v2 = "bash scripts/installation/ensure_progeny_native_release.sh progeny-primary-candidate-scan-v2"
+primary-candidate-scan-v2 = ".pixi/build/progeny-native-release-gcc14.4/progeny-primary-candidate-scan-v2"
+build-direct-accession-anchors = "bash scripts/installation/ensure_progeny_native_release.sh progeny-direct-accession-anchors-v1"
+direct-accession-anchors-v1 = ".pixi/build/progeny-native-release-gcc14.4/progeny-direct-accession-anchors-v1"
+build-candidate-sequence-extract = "bash scripts/installation/ensure_progeny_native_release.sh progeny-candidate-sequence-extract-v1"
+candidate-sequence-extract-v1 = ".pixi/build/progeny-native-release-gcc14.4/progeny-candidate-sequence-extract-v1"
+build-onehop-lineage-scan = "bash scripts/installation/ensure_progeny_native_release.sh progeny-onehop-lineage-scan-v1"
+onehop-lineage-scan-v1 = ".pixi/build/progeny-native-release-gcc14.4/progeny-onehop-lineage-scan-v1"
+build-directional-glocal-full-dp = "bash scripts/installation/ensure_progeny_native_release.sh progeny-directional-glocal-full-dp-v1"
+directional-glocal-full-dp-v1 = ".pixi/build/progeny-native-release-gcc14.4/progeny-directional-glocal-full-dp-v1"
+
+build-full-exact-cross-strain = "bash scripts/installation/ensure_progeny_native_release.sh progeny-full-exact-cross-strain-v1"
+full-exact-cross-strain-v1 = ".pixi/build/progeny-native-release-gcc14.4/progeny-full-exact-cross-strain-v1"
+
+# Canonical V2 certified bounded DP, separate from legacy full DP V1.
+build-certified-bounded-dp-v2 = "bash scripts/installation/ensure_progeny_native_release.sh progeny-directional-glocal-bounded-dp-v2"
+certified-bounded-dp-v2 = ".pixi/build/progeny-native-release-gcc14.4/progeny-directional-glocal-bounded-dp-v2"
+build-certified-rolling-dp-v1 = "bash scripts/installation/ensure_progeny_native_release.sh progeny-directional-glocal-linear-dp-v1"
+certified-rolling-dp-v1 = ".pixi/build/progeny-native-release-gcc14.4/progeny-directional-glocal-linear-dp-v1"

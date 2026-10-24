@@ -1,0 +1,11 @@
+{
+  "schema": "progeny-guided-advanced-v1",
+  "threads": 16,
+  "max_pair_cells": 50000000,
+  "max_total_cells": 500000000,
+  "max_chunk_cells": 50000000,
+  "max_dp_memory_bytes": 2147483648,
+  "checkpoint_rows": 256,
+  "temporal_policy": null,
+  "performance_profile": null
+}

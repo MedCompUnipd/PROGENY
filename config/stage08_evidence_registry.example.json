@@ -1,0 +1,153 @@
+{
+  "codes": {
+    "EXP": {
+      "description": "Legacy PROGENY grouping: legacy_experimental_traditional",
+      "source": "progeny-legacy"
+    },
+    "HDA": {
+      "description": "Legacy PROGENY grouping: legacy_experimental_high_throughput",
+      "source": "progeny-legacy"
+    },
+    "HEP": {
+      "description": "Legacy PROGENY grouping: legacy_experimental_high_throughput",
+      "source": "progeny-legacy"
+    },
+    "HGI": {
+      "description": "Legacy PROGENY grouping: legacy_experimental_high_throughput",
+      "source": "progeny-legacy"
+    },
+    "HMP": {
+      "description": "Legacy PROGENY grouping: legacy_experimental_high_throughput",
+      "source": "progeny-legacy"
+    },
+    "HTP": {
+      "description": "Legacy PROGENY grouping: legacy_experimental_high_throughput",
+      "source": "progeny-legacy"
+    },
+    "IBA": {
+      "description": "Legacy PROGENY grouping: legacy_phylogenetic_curated",
+      "source": "progeny-legacy"
+    },
+    "IBD": {
+      "description": "Legacy PROGENY grouping: legacy_phylogenetic_curated",
+      "source": "progeny-legacy"
+    },
+    "IC": {
+      "description": "Legacy PROGENY grouping: legacy_traceable_curated_statement",
+      "source": "progeny-legacy"
+    },
+    "IDA": {
+      "description": "Legacy PROGENY grouping: legacy_experimental_traditional",
+      "source": "progeny-legacy"
+    },
+    "IEA": {
+      "description": "Legacy PROGENY grouping: legacy_electronic",
+      "source": "progeny-legacy"
+    },
+    "IEP": {
+      "description": "Legacy PROGENY grouping: legacy_experimental_traditional",
+      "source": "progeny-legacy"
+    },
+    "IGC": {
+      "description": "Legacy PROGENY grouping: legacy_computational_curated",
+      "source": "progeny-legacy"
+    },
+    "IGI": {
+      "description": "Legacy PROGENY grouping: legacy_experimental_traditional",
+      "source": "progeny-legacy"
+    },
+    "IKR": {
+      "description": "Legacy PROGENY grouping: legacy_phylogenetic_curated",
+      "source": "progeny-legacy"
+    },
+    "IMP": {
+      "description": "Legacy PROGENY grouping: legacy_experimental_traditional",
+      "source": "progeny-legacy"
+    },
+    "IPI": {
+      "description": "Legacy PROGENY grouping: legacy_experimental_traditional",
+      "source": "progeny-legacy"
+    },
+    "IRD": {
+      "description": "Legacy PROGENY grouping: legacy_phylogenetic_curated",
+      "source": "progeny-legacy"
+    },
+    "ISA": {
+      "description": "Legacy PROGENY grouping: legacy_computational_curated",
+      "source": "progeny-legacy"
+    },
+    "ISM": {
+      "description": "Legacy PROGENY grouping: legacy_computational_curated",
+      "source": "progeny-legacy"
+    },
+    "ISO": {
+      "description": "Legacy PROGENY grouping: legacy_computational_curated",
+      "source": "progeny-legacy"
+    },
+    "ISS": {
+      "description": "Legacy PROGENY grouping: legacy_computational_curated",
+      "source": "progeny-legacy"
+    },
+    "NAS": {
+      "description": "Legacy PROGENY grouping: legacy_unusable",
+      "source": "progeny-legacy"
+    },
+    "ND": {
+      "description": "Legacy PROGENY grouping: legacy_unusable",
+      "source": "progeny-legacy"
+    },
+    "RCA": {
+      "description": "Legacy PROGENY grouping: legacy_computational_curated",
+      "source": "progeny-legacy"
+    },
+    "TAS": {
+      "description": "Legacy PROGENY grouping: legacy_traceable_curated_statement",
+      "source": "progeny-legacy"
+    }
+  },
+  "groups": {
+    "legacy_computational_curated": [
+      "IGC",
+      "ISA",
+      "ISM",
+      "ISO",
+      "ISS",
+      "RCA"
+    ],
+    "legacy_electronic": [
+      "IEA"
+    ],
+    "legacy_experimental_high_throughput": [
+      "HDA",
+      "HEP",
+      "HGI",
+      "HMP",
+      "HTP"
+    ],
+    "legacy_experimental_traditional": [
+      "EXP",
+      "IDA",
+      "IEP",
+      "IGI",
+      "IMP",
+      "IPI"
+    ],
+    "legacy_phylogenetic_curated": [
+      "IBA",
+      "IBD",
+      "IKR",
+      "IRD"
+    ],
+    "legacy_traceable_curated_statement": [
+      "IC",
+      "TAS"
+    ],
+    "legacy_unusable": [
+      "NAS",
+      "ND"
+    ]
+  },
+  "origin": "PROGENY legacy classifications, preserved as a compatibility snapshot; not an official ECO ontology release",
+  "registry_id": "progeny-legacy-evidence-snapshot-v1",
+  "schema_version": "progeny-evidence-registry-v1"
+}
