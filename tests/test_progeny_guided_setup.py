@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import gzip
 import json
 import os
@@ -476,3 +477,69 @@ def test_alpha_advanced_config_applies_policy_and_runtime(configured):
     assert "performance_profile=" in script
     spec = json.loads((dataset / "config/fresh-spec.json").read_text())
     assert spec["recipe"]["large_dp"]["checkpoint_rows"] == 128
+
+
+def test_cafa5_tagged_fasta_expected_rejections_and_accessions(configured):
+    answers, repo = configured
+    source = Path(answers["targets_fasta"])
+    sequence = "ACDEFGHIKLMNPQRSTVWY"
+    source.write_text(
+        f">P10001\t111\n{sequence}\n"
+        f">P10001\t111\n{sequence}\n"
+        ">P20001\t111\nACDEF\n"
+        f">P30001\t111\n{sequence}\n",
+        encoding="ascii",
+    )
+    answers["header_ids_are_uniprot_accessions"] = True
+    create_project(answers, repo=repo, build_missing=False)
+    dataset = Path(answers["dataset_dir"])
+    summary = json.loads((dataset / "targets/00_summary.json").read_text())
+    assert summary["accepted_targets"] == 2
+    assert summary["deduplicated_identical_records"] == 1
+    assert summary["rejected_below_minlen"] == 1
+    assert summary["rejected_unknown_taxid"] == 0
+    with (dataset / "targets/targets.rejected.tsv").open(newline="") as handle:
+        reasons = [row["reason"] for row in csv.DictReader(handle, delimiter="\t")]
+    assert reasons == ["DUPLICATE_IDENTICAL_RECORD", "BELOW_MINLEN"]
+    with (dataset / "targets/targets.metadata.tsv").open(newline="") as handle:
+        records = list(csv.DictReader(handle, delimiter="\t"))
+    assert [row["uniprot_accession"] for row in records] == ["P10001", "P30001"]
+    ledger = (dataset / "identity/original_headers.tsv").read_text()
+    assert "P10001\t111" in ledger
+    assert "P30001\t111" in ledger
+    assert "P20001" not in ledger
+    spec = json.loads(
+        (dataset / "config/scientific-identity-inventory.json").read_text()
+    )
+    assert spec["choices"]["header_ids_are_uniprot_accessions"] is True
+
+
+def test_cafa5_numbered_uncompressed_gaf_direct_reference(configured):
+    answers, repo = configured
+    source = Path(answers["releases"]["START"]["goa"])
+    numbered = source.with_name("goa.gaf.213")
+    source.rename(numbered)
+    answers["releases"]["START"]["goa"] = str(numbered)
+    create_project(answers, repo=repo, build_missing=False)
+    recipe = read_recipe(
+        Path(answers["run_dir"]) / "fresh_recipe.json", expected_repo=repo
+    )
+    assert Path(recipe.pipeline["releases"]["START"]["goa"]) == numbered
+    assert numbered.exists()
+    assert not (Path(answers["dataset_dir"]) / "prepared/START/goa.gaf").exists()
+
+
+def test_cafa5_uniprot_accession_flag_must_be_explicit(configured):
+    answers, repo = configured
+    answers["header_ids_are_uniprot_accessions"] = "yes"
+    with pytest.raises(ValueError, match="declaration must be a boolean"):
+        create_project(answers, repo=repo, build_missing=False)
+    assert not Path(answers["dataset_dir"]).exists()
+
+
+def test_cafa5_malformed_uniprot_accession_fails_closed(configured):
+    answers, repo = configured
+    answers["header_ids_are_uniprot_accessions"] = True
+    with pytest.raises(subprocess.CalledProcessError):
+        create_project(answers, repo=repo, build_missing=False)
+    assert not Path(answers["run_dir"]).exists()

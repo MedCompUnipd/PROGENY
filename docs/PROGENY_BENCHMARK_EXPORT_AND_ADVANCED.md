@@ -65,8 +65,23 @@ The original input header is preserved **literally**, including any
 user-supplied description or, for already-taxid-tagged FASTA, the TaxID tab.
 For the ordinary FASTA modes, `query_id` in the user-facing TSV is the
 **first whitespace-delimited identifier** from the header. The existing
-wizard requires this token to be unique, ASCII and parseable. It rejects
-ambiguous or duplicate source IDs, rather than inventing new names.
+wizard requires this token to be ASCII and parseable. Conflicting
+repeated IDs are rejected; identical repeated records are deduplicated
+with a recorded reason, without inventing new names.
+
+For already-taxid-tagged input use `>SOURCE_ID<TAB>NCBI_TAXID`; the TAB
+must be literal. Stage 00 excludes exact repeated records (same ID,
+TaxID and sequence) and proteins shorter than 10 amino acids, and
+records both reasons in `targets.rejected.tsv`. Different IDs with an
+identical sequence remain separate biological target records. Unknown
+TaxIDs remain a hard setup failure. If the IDs are genuinely UniProt
+accessions, answer Yes to the explicit wizard question; otherwise leave
+the optional accession metadata blank. This declaration validates
+syntax but does not prove UniProt record existence.
+
+For historical GOA exports named `*.gaf.N` (for example `.gaf.213`),
+the wizard accepts the original uncompressed file directly after
+checking its `!gaf-version: 2` header, without duplicating its contents.
 
 The original header provenance is snapshotted at Guided Setup in
 `dataset/identity/original_headers.tsv`, checksum-locked by its manifest,

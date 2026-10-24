@@ -60,6 +60,13 @@ bash /path/to/your-study-dataset/START_PROGENY.sh
 for the list of required biological files, example FASTA headers, the meaning
 of each scientific policy and what PROGENY will and will not check.
 
+For FASTA already containing `>SOURCE_ID<TAB>NCBI_TAXID`, Stage 00
+records and excludes exact repeated records and sequences below 10 aa.
+The wizard rejects unresolved TaxIDs and conflicting duplicate IDs.
+When original IDs are truly UniProt accessions, explicitly select the
+corresponding option to preserve them as accession metadata. Numbered
+uncompressed GOA sources such as `.gaf.213` are supported without copying.
+
 The reference evidence classification is a versioned, reviewed PROGENY legacy
 profile, **not an official ECO standard**. You must explicitly accept it and
 ensure it is appropriate for your study. Files must already be available:

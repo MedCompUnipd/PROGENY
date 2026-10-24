@@ -335,6 +335,7 @@ def _inspect_inputs(options: dict, repo: Path, dataset: Path, run: Path) -> dict
         "targets_mode",
         "targets_taxid",
         "targets_taxid_table",
+        "header_ids_are_uniprot_accessions",
         "execution",
         "advanced_config",
     }
@@ -345,6 +346,9 @@ def _inspect_inputs(options: dict, repo: Path, dataset: Path, run: Path) -> dict
         "Target identifiers",
         ("already_tagged", "single_species", "taxid_table"),
     )
+    accession_ids = options.get("header_ids_are_uniprot_accessions", False)
+    if type(accession_ids) is not bool:
+        raise ValueError("UniProt accession declaration must be a boolean")
     if mode == "single_species":
         taxid = options.get("targets_taxid")
         if not isinstance(taxid, str) or not re.fullmatch(r"[1-9][0-9]*", taxid):
@@ -410,8 +414,12 @@ def _inspect_inputs(options: dict, repo: Path, dataset: Path, run: Path) -> dict
                 not suffixes or suffixes[-1] not in (".gz", ".dat")
             ):
                 raise ValueError(f"{role} {label} must be .dat or .dat.gz")
-            if label == "goa" and (not suffixes or suffixes[-1] not in (".gz", ".gaf")):
-                raise ValueError(f"{role} GOA must be .gaf or .gaf.gz")
+            if label == "goa":
+                numbered_gaf = re.search(r"\.gaf\.[1-9][0-9]*\Z", file.name) is not None
+                if not numbered_gaf and (
+                    not suffixes or suffixes[-1] not in (".gz", ".gaf")
+                ):
+                    raise ValueError(f"{role} GOA must be .gaf, .gaf.gz or .gaf.N")
             if file.suffix == ".gz" and _head(file)[:2] != b"\x1f\x8b":
                 raise ValueError(f"Invalid gzip header: {file}")
             if label == "goa" and not _head(file, gzip_ok=True).startswith(
@@ -664,6 +672,9 @@ def _identity_inventory(
         | {
             "targets_mode": options.get("targets_mode", "already_tagged"),
             "targets_taxid": options.get("targets_taxid"),
+            "header_ids_are_uniprot_accessions": options.get(
+                "header_ids_are_uniprot_accessions", False
+            ),
         },
         "pipeline_science": {
             key: pipeline[key]
@@ -779,33 +790,40 @@ def create_project(options: dict, *, repo: Path, build_missing: bool = True) -> 
         }
         # Stage 00 performs literal ID/TaxID validation and emits exact manifests.
         tagged_fasta = _targets_with_taxids(options, inputs, dataset)
-        subprocess.run(
-            [
-                sys.executable,
-                str(repo / "scripts/pipeline/00_import_targets.py"),
-                "--input",
-                str(tagged_fasta),
-                "--output-directory",
-                str(dataset / "targets"),
-                "--taxonomy-nodes",
-                str(inputs["START.taxonomy.nodes.dmp"]),
-                "--taxonomy-merged",
-                str(inputs["START.taxonomy.merged.dmp"]),
-                "--minlen",
-                "10",
-            ],
-            cwd=repo,
-            check=True,
-        )
+        stage00_args = [
+            sys.executable,
+            str(repo / "scripts/pipeline/00_import_targets.py"),
+            "--input",
+            str(tagged_fasta),
+            "--output-directory",
+            str(dataset / "targets"),
+            "--taxonomy-nodes",
+            str(inputs["START.taxonomy.nodes.dmp"]),
+            "--taxonomy-merged",
+            str(inputs["START.taxonomy.merged.dmp"]),
+            "--minlen",
+            "10",
+        ]
+        if options.get("header_ids_are_uniprot_accessions", False):
+            stage00_args.append("--header-ids-are-uniprot-accessions")
+        subprocess.run(stage00_args, cwd=repo, check=True)
         stage00 = json.loads(
             (dataset / "targets/00_summary.json").read_text(encoding="utf-8")
         )
-        if stage00["rejected_targets"] - stage00["deduplicated_identical_records"]:
+        if stage00["rejected_unknown_taxid"]:
             raise ValueError(
-                "Some proteins were rejected by Stage 00. Open "
-                f"{dataset / 'targets/targets.rejected.tsv'} and correct "
-                "their taxonomy or sequence length before continuing."
+                "Unknown TaxID targets cannot be silently excluded. Open "
+                f"{dataset / 'targets/targets.rejected.tsv'} to resolve them."
             )
+        print(
+            "STAGE00_ACCEPTED="
+            + str(stage00["accepted_targets"])
+            + " BELOW_MINLEN="
+            + str(stage00["rejected_below_minlen"])
+            + " IDENTICAL_DUPLICATES="
+            + str(stage00["deduplicated_identical_records"]),
+            flush=True,
+        )
         preserve_headers(
             inputs["targets_raw"], dataset / "targets", dataset / "identity"
         )
@@ -1004,6 +1022,16 @@ def interactive_answers() -> dict:
     elif answers["targets_mode"] == "taxid_table":
         print("  TSV header: target_id<TAB>ncbi_taxid; IDs match the first FASTA word.")
         answers["targets_taxid_table"] = _ask("Path to protein-to-TaxID TSV")
+    answers["header_ids_are_uniprot_accessions"] = (
+        _menu(
+            "Are all original protein IDs actual UniProt accession IDs?",
+            (
+                ("no", "No / not certain (keep accession field blank)"),
+                ("yes", "Yes (validate every ID and preserve as accession)"),
+            ),
+        )
+        == "yes"
+    )
     for role in ROLES:
         label = "earlier" if role == "START" else "later"
         print(f"\n{role}: data from the {label} release")
@@ -1013,7 +1041,7 @@ def interactive_answers() -> dict:
             "taxonomy_id": _ask(f"{role} taxonomy snapshot label", release),
             "sprot": _ask(f"{role} UniProt Swiss-Prot .dat or .dat.gz"),
             "trembl": _ask(f"{role} UniProt TrEMBL .dat or .dat.gz"),
-            "goa": _ask(f"{role} GO annotations .gaf or .gaf.gz"),
+            "goa": _ask(f"{role} GO annotations .gaf, .gaf.gz or .gaf.N"),
             "taxonomy_dir": _ask(f"{role} folder with NCBI taxonomy *.dmp files"),
         }
     print("\nThe built-in experimental evidence profile is a PROGENY reference")
@@ -1084,6 +1112,7 @@ def interactive_answers() -> dict:
         f"  Releases: {answers['releases']['START']['release_id']} -> "
         f"{answers['releases']['END']['release_id']}"
     )
+    print(f"  UniProt IDs: {answers['header_ids_are_uniprot_accessions']}")
     print(f"  EXACT: {answers['exact_policy']}")
     print(f"  Partial: {answers['partial_sequence']}")
     print(f"  Documentary fragments: {answers['documentary_fragment']}")
