@@ -912,7 +912,9 @@ def create_project(options: dict, *, repo: Path, build_missing: bool = True) -> 
                 "pixi",
                 "run",
                 "python",
-                str(repo / "scripts/installation/export_progeny_benchmark.py"),
+                str(
+                    repo / "scripts/installation/publish_progeny_scientific_results.py"
+                ),
                 "--dataset",
                 str(dataset),
                 "--run",
