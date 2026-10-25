@@ -1,11 +1,11 @@
 # PROGENY final scientific publication: implementation and review contract
 
-**Status:** reference-validated pre-commit release candidate, based on
+**Status:** validated PR #1 review candidate, based on
 canonical Alpha 2 `6d516425f2f83caf04c359d97ea99d4b64976ea6`.
 Verified on the 2026-10-25 reference CAFA5 scientific run. This increment
 changes neither Stage 00--Temporal, nor the 16 canonical receipts, nor the
-scientific policies that produced them. Commit and push follow source/diff
-review; no claim of released GitHub `main` is made here.
+scientific policies that produced them. The collector is committed to a
+review branch; merging into GitHub `main` requires the final PR review.
 
 ## Entry point and trigger
 

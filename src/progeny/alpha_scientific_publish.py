@@ -43,6 +43,70 @@ def _table(path: Path, fields: tuple[str, ...], records) -> None:
         writer.writerows(records)
 
 
+_ROLE_RECEIPTS = ("exact", "ledger", "projection", "lookup")
+_COMMON_RECEIPTS = (
+    "handoff",
+    "b3",
+    "workload",
+    "alignment",
+    "stage07",
+    "m8",
+    "m10c",
+    "temporal",
+)
+_POLICY_RECEIPTS = frozenset(("stage07", "m8", "m10c", "temporal"))
+_EXPECTED_RECEIPTS = frozenset(
+    f"{stage}:{role}" for stage in _ROLE_RECEIPTS for role in ("START", "END")
+) | frozenset(f"{stage}:COMMON" for stage in _COMMON_RECEIPTS)
+
+
+def _verify_certificate_receipts(run: Path, data: dict) -> None:
+    receipts = data.get("receipts")
+    if not isinstance(receipts, dict) or set(receipts) != _EXPECTED_RECEIPTS:
+        raise ValueError("Scientific certificate has incorrect receipt keys")
+    canonical = run / "canonical"
+    namespaces = {}
+    for name, receipt in sorted(receipts.items()):
+        if not isinstance(receipt, dict) or set(receipt) != {"path", "sha256"}:
+            raise ValueError(f"Malformed certified receipt: {name}")
+        stage, role = name.split(":", 1)
+        kind = "policy" if stage in _POLICY_RECEIPTS else "discovery"
+        path_value = receipt["path"]
+        digest = receipt["sha256"]
+        if not isinstance(path_value, str) or not isinstance(digest, str):
+            raise ValueError(f"Invalid certified receipt metadata: {name}")
+        path = Path(path_value)
+        if not path.is_absolute():
+            raise ValueError(f"Nonabsolute certified receipt: {name}")
+        try:
+            relative = path.relative_to(canonical)
+        except ValueError as exc:
+            raise ValueError(f"Receipt outside canonical run: {name}") from exc
+        parts = relative.parts
+        expected_file = (
+            f"{role}.snakemake.done" if role != "COMMON" else f"{stage}.snakemake.done"
+        )
+        expected_length = 3 if role != "COMMON" else 2
+        if (
+            len(parts) != expected_length
+            or not parts[0].startswith(f"v2-{kind}-")
+            or len(parts[0]) <= len(f"v2-{kind}-")
+            or parts[-1] != expected_file
+            or (role != "COMMON" and parts[1] != stage)
+        ):
+            raise ValueError(f"Unexpected certified receipt location: {name}")
+        if kind in namespaces and namespaces[kind] != parts[0]:
+            raise ValueError(f"Mixed scientific namespaces in receipt: {name}")
+        namespaces[kind] = parts[0]
+        try:
+            if path.resolve(strict=True) != path:
+                raise ValueError(f"Symlinked certified receipt path: {name}")
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(f"Missing certified receipt: {name}") from exc
+        if _sha(_regular(path)) != digest:
+            raise ValueError(f"Scientific receipt checksum mismatch: {name}")
+
+
 def _read_certificate(run: Path) -> Path:
     records = list((run / "verification").glob("*.json"))
     matches = []
@@ -52,19 +116,40 @@ def _read_certificate(run: Path) -> Path:
             data.get("schema") == "progeny-canonical-v2-fresh-completion-v1"
             and data.get("status") == "PASS"
             and data.get("canonical_publications") == 16
-            and len(data.get("receipts", {})) == 16
+            and isinstance(data.get("receipts"), dict)
+            and len(data["receipts"]) == 16
             and path.stem == data.get("content_identity_sha256")
         ):
-            matches.append(path)
+            matches.append((path, data))
     if len(matches) != 1:
         raise ValueError("Exactly one certified 16-receipt completion is required")
-    return matches[0]
+    certificate, content = matches[0]
+    _verify_certificate_receipts(run, content)
+    return certificate
 
 
 def _verify_existing(destination: Path) -> Path:
     manifest = _json(destination / "manifest.json")
     if manifest.get("schema") != SCHEMA or manifest.get("status") != "PUBLISHED":
         raise ValueError("Existing user benchmark is not a valid publication")
+    outputs = manifest.get("outputs")
+    if not isinstance(outputs, dict) or not outputs:
+        raise ValueError("Existing benchmark has no output inventory")
+    if any(
+        not isinstance(name, str)
+        or not name
+        or name == "manifest.json"
+        or Path(name).name != name
+        for name in outputs
+    ):
+        raise ValueError("Existing benchmark has unsafe output names")
+    actual = {member.name for member in destination.iterdir()}
+    if actual != set(outputs) | {"manifest.json"}:
+        raise ValueError("Existing benchmark output inventory mismatch")
+    if any(
+        member.is_symlink() or not member.is_file() for member in destination.iterdir()
+    ):
+        raise ValueError("Existing benchmark contains unsafe output members")
     for section in ("inputs", "outputs"):
         for name, item in manifest[section].items():
             path = Path(item["path"]) if section == "inputs" else destination / name

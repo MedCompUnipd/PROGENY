@@ -12,6 +12,42 @@ from test_alpha_benchmark_export import _fixture, _json, _sha, _tsv
 from progeny.alpha_scientific_publish import publish_scientific_benchmark
 
 
+def _synthetic_receipts(run: Path, temporal: Path) -> dict:
+    result = {}
+    discovery = run / "canonical/v2-discovery-test"
+    policy = temporal.parent
+    for stage in ("exact", "ledger", "projection", "lookup"):
+        for role in ("START", "END"):
+            path = discovery / stage / f"{role}.snakemake.done"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("synthetic receipt\n", encoding="ascii")
+            result[f"{stage}:{role}"] = {
+                "path": str(path),
+                "sha256": _sha(path),
+            }
+    for stage in (
+        "handoff",
+        "b3",
+        "workload",
+        "alignment",
+        "stage07",
+        "m8",
+        "m10c",
+        "temporal",
+    ):
+        root = policy if stage in {"stage07", "m8", "m10c", "temporal"} else discovery
+        path = root / f"{stage}.snakemake.done"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_text("synthetic receipt\n", encoding="ascii")
+        result[f"{stage}:COMMON"] = {
+            "path": str(path),
+            "sha256": _sha(path),
+        }
+    assert len(result) == 16
+    return result
+
+
 def _ready(tmp_path: Path):
     dataset, run = _fixture(tmp_path)
     temporal = next((run / "canonical").glob("*/temporal"))
@@ -90,13 +126,7 @@ def _ready(tmp_path: Path):
             "status": "PASS",
             "canonical_publications": 16,
             "content_identity_sha256": "a" * 64,
-            "receipts": {
-                **{f"item-{i}": {} for i in range(15)},
-                "temporal:COMMON": {
-                    "path": str(temporal.parent / "temporal.snakemake.done"),
-                    "sha256": _sha(temporal.parent / "temporal.snakemake.done"),
-                },
-            },
+            "receipts": _synthetic_receipts(run, temporal),
         },
     )
     return dataset, run, temporal
@@ -169,4 +199,66 @@ def test_existing_publication_tamper_refused(tmp_path):
     result = publish_scientific_benchmark(dataset, run)
     (result / "neutral_terms.tsv").write_text("tampered")
     with pytest.raises(ValueError, match="checksum"):
+        publish_scientific_benchmark(dataset, run)
+
+
+def _certificate(run: Path) -> Path:
+    return next((run / "verification").glob("*.json"))
+
+
+def test_wrong_non_temporal_receipt_hash_fails_closed(tmp_path):
+    dataset, run, _ = _ready(tmp_path)
+    certificate = _certificate(run)
+    data = json.loads(certificate.read_text())
+    data["receipts"]["stage07:COMMON"]["sha256"] = "0" * 64
+    _json(certificate, data)
+    with pytest.raises(ValueError, match="receipt checksum"):
+        publish_scientific_benchmark(dataset, run)
+    assert not (run / "results/benchmark").exists()
+
+
+def test_missing_non_temporal_receipt_fails_closed(tmp_path):
+    dataset, run, _ = _ready(tmp_path)
+    data = json.loads(_certificate(run).read_text())
+    Path(data["receipts"]["m8:COMMON"]["path"]).unlink()
+    with pytest.raises(ValueError, match="Missing certified receipt"):
+        publish_scientific_benchmark(dataset, run)
+    assert not (run / "results/benchmark").exists()
+
+
+def test_unexpected_receipt_key_fails_closed(tmp_path):
+    dataset, run, _ = _ready(tmp_path)
+    certificate = _certificate(run)
+    data = json.loads(certificate.read_text())
+    data["receipts"]["foreign:COMMON"] = data["receipts"].pop("stage07:COMMON")
+    _json(certificate, data)
+    with pytest.raises(ValueError, match="receipt keys"):
+        publish_scientific_benchmark(dataset, run)
+    assert not (run / "results/benchmark").exists()
+
+
+def test_receipt_path_swap_fails_closed(tmp_path):
+    dataset, run, _ = _ready(tmp_path)
+    certificate = _certificate(run)
+    data = json.loads(certificate.read_text())
+    data["receipts"]["exact:START"] = data["receipts"]["exact:END"]
+    _json(certificate, data)
+    with pytest.raises(ValueError, match="receipt location"):
+        publish_scientific_benchmark(dataset, run)
+    assert not (run / "results/benchmark").exists()
+
+
+def test_existing_publication_extra_file_fails_closed(tmp_path):
+    dataset, run, _ = _ready(tmp_path)
+    result = publish_scientific_benchmark(dataset, run)
+    (result / "undocumented.tsv").write_text("not in manifest\n")
+    with pytest.raises(ValueError, match="output inventory"):
+        publish_scientific_benchmark(dataset, run)
+
+
+def test_existing_publication_extra_directory_fails_closed(tmp_path):
+    dataset, run, _ = _ready(tmp_path)
+    result = publish_scientific_benchmark(dataset, run)
+    (result / "undocumented-directory").mkdir()
+    with pytest.raises(ValueError, match="output inventory"):
         publish_scientific_benchmark(dataset, run)
