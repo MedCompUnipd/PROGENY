@@ -91,14 +91,19 @@ See `LICENSE` for licensing terms.
 
 ## Benchmark deliverables and Power User controls
 
-A successful run through the **generated launcher** now publishes a separate
-user-facing bundle at `STUDY-RUN/results/benchmark/`. The export contains a
-FASTA with **the complete original user headers** for evaluable targets,
-GO EVAL/SKIP tables with original protein IDs, identity mapping for debug,
-and an offline `report.html` with START/END release statistics, target survival,
-species and MF/BP/CC GO counts. Stage 00 and all canonical scientific outputs
-continue to use `T000000...` internally and are never rewritten by the export.
-The report is descriptive: Fmax/Precision–Recall scoring is deferred.
+After a successful run through the **generated launcher**, the separate
+scientific collector publishes `STUDY-RUN/results/benchmark/`, including
+`ground_truth_targets.fasta` (original *complete* user headers and verified
+sequences), propagated `benchmark_terms.tsv` with **EVAL/SKIP/NEUTRAL**,
+`target_cohorts.tsv`, full species/aspect statistics, M8 evidence inventory,
+`report.html`, metric-mask instructions and a SHA-256 publication manifest.
+The first whitespace-delimited FASTA token becomes the TSV `query_id`;
+internal `T000...` IDs remain unchanged in the scientific pipeline. NK/LK/PK
+cohorts currently remain `UNCLASSIFIED` pending direct START evidence audit.
+No predictor Fmax or Smin is computed by the collector. The canonical DAG is
+unchanged and the publisher can be rerun independently after certificate PASS.
+See [the post-run user guide](docs/PROGENY_POSTRUN_PUBLISHER_USER_GUIDE.md)
+for outputs and the precise semantics of EVAL/SKIP/NEUTRAL.
 
 Two configuration levels are supported. Guided Setup keeps the reviewed
 reference experimental evidence profile as its default and displays a

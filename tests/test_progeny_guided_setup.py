@@ -373,7 +373,7 @@ def test_snakemake_launcher_target_is_not_swallowed_by_config(configured):
         f"fresh_recipe={Path(answers['run_dir']) / 'fresh_recipe.json'}"
     )
     assert export_argv[:3] == ["pixi", "run", "python"]
-    assert Path(export_argv[3]).name == "export_progeny_benchmark.py"
+    assert Path(export_argv[3]).name == "publish_progeny_scientific_results.py"
     assert export_argv[4:] == [
         "--dataset",
         answers["dataset_dir"],
@@ -427,8 +427,10 @@ def test_alpha_original_header_ledger_and_export_launcher(configured):
     assert "T000000001" in original
     assert (dataset / "identity/manifest.json").is_file()
     launch = (dataset / "START_PROGENY.sh").read_text()
-    assert "export_progeny_benchmark.py" in launch
-    assert launch.index("snakemake all") < launch.index("export_progeny_benchmark.py")
+    assert "publish_progeny_scientific_results.py" in launch
+    assert launch.index("snakemake all") < launch.index(
+        "publish_progeny_scientific_results.py"
+    )
     assert not (Path(answers["run_dir"]) / "results/benchmark").exists()
 
 

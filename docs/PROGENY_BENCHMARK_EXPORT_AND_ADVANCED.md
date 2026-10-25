@@ -97,58 +97,115 @@ identity remain separate concepts.
 
 ## After the successful scientific run
 
-Use the generated `START_PROGENY.sh` (direct, tmux, nohup, or its SLURM
-wrapper). After Snakemake successfully publishes the temporal benchmark,
-it calls the read-only adapter:
+The generated `START_PROGENY.sh` runs Snakemake first. **Only after** a
+successful scientific run does it invoke the post-run collector:
 
 ```bash
-pixi run python scripts/installation/export_progeny_benchmark.py \
+pixi run python scripts/installation/publish_progeny_scientific_results.py \
   --dataset /absolute/path/to/study-dataset \
   --run /absolute/path/to/study-run
 ```
 
-**Nothing is exported at setup time.** The adapter requires the temporal
-completion receipt and validates every source payload checksum against the
-canonical publication. The new directory is created atomically under
-`run/results/benchmark/`; no file under `run/canonical/` or `dataset/targets/`
-is overwritten. On a rerun it verifies the existing bundle and reuses it,
-never silently overwriting a publication.
+For a run executed using the canonical controller directly (rather than the
+generated launcher), invoke this same command **after** canonical verification
+has returned `PASS`. Do not introduce a second Snakemake rule or run the
+collector before the 16-receipt certificate is available. For a failed
+collector, repair the separate publisher and rerun this command only; never
+rerun or change the completed scientific DAG just to obtain the report.
 
-| File | Use |
+The collector checks the scientific completion certificate, canonical temporal
+manifest, original FASTA identity ledger and the required inputs. It creates
+`RUN_ROOT/results/benchmark/` atomically. Existing output is checked against
+its recorded input/output SHA-256 checksums and reused only when unchanged.
+It does not alter `RUN_ROOT/canonical/` or the study dataset.
+
+### User-facing files
+
+| File | Meaning |
 | --- | --- |
-| `ground_truth_targets.fasta` | Evaluable targets only, with original complete FASTA headers and exact sequences |
-| `benchmark_terms.tsv` | User `query_id`, aspect, GO and `EVAL`/`SKIP` status |
-| `skip_terms.tsv` | User query IDs and GO terms intentionally excluded from evaluation |
-| `target_aspects.tsv` | Which target/aspects were eligible and their counts |
-| `temporal_events.tsv` | NOVEL, CONFIRMATION and other dated events by original ID |
-| `term_audit.tsv` | Per-target decision and evidence flags by original ID |
-| `negative_terms.tsv` | Documented negative/NOT audits, **not** assumed biological negatives |
-| `target_identity_map.tsv` | Every Stage 00 accepted input ID, complete header, internal ID, original TaxID, length hash and evaluability |
-| `non_evaluable_targets.tsv` | Target IDs with no EVAL in any aspect; absence of EVAL is not a biological negative |
-| `statistics.json` | Machine-readable target, aspect, species and release statistics |
-| `report.html` | Standalone offline human-readable report |
-| `manifest.json` | Output and source checksum ledger |
+| `ground_truth_targets.fasta` | Evaluable proteins only, restored full original headers and verified sequences |
+| `benchmark_terms.tsv` | `(query_id, aspect, go_id, status)` including propagated `EVAL`, `SKIP`, `NEUTRAL` for eligible aspects |
+| `skip_terms.tsv`, `neutral_terms.tsv` | Filtered convenience copies of the two metric masks |
+| `target_aspects.tsv` | Every eligible target/aspect and its status counts |
+| `target_identity_map.tsv` | All accepted user IDs, canonical `T000...` IDs, original headers, target TaxIDs and SHA-256 |
+| `non_evaluable_targets.tsv` | Input proteins without EVAL in any GO aspect |
+| `target_cohorts.tsv` | Eligible target/aspect, target species, START flags, event counts, classification status |
+| `aspect_statistics.tsv` | MF, BP and CC status, direct event and NOVEL/CONFIRMATION counts |
+| `species_statistics.tsv` | All represented target species TaxIDs and three aspects |
+| `go_frequency.tsv` | Protein--GO association counts by GO term, aspect and status |
+| `evidence_by_release.tsv` | **Aggregate M8** START/END evidence-code, polarity and source/link inventory; not a target-specific attribution table |
+| `term_audit.tsv` | Scientific per-term reasons, including NOVEL and CONFIRMATION |
+| `temporal_events.tsv` | Directly recorded temporal events; not all propagated EVAL |
+| `negative_terms.tsv` | Negative/NOT provenance; not biological true negatives |
+| `statistics.json`, `report.html` | Reconciled machine-readable results and offline summary |
+| `README.md`, `EVALUATION_LEGEND.md` | Instructions and metric-mask semantics distributed with each benchmark |
+| `manifest.json` | Publication identity and input/output checksum ledger |
 
-Proteins with no EVAL in **any** ontology aspect are omitted from the
-user-facing FASTA but retained in `target_identity_map.tsv` with `NO_EVAL`.
-A target can be evaluable for MF while not evaluable for BP or CC; always
-read the `aspect` column. The number of GO pairs with repetitions is the
-number of distinct `(user ID, aspect, GO)` records, whereas *unique GO* is a
-term count independent of how many proteins share that term.
+`report.html` displays the 50 leading species; `species_statistics.tsv`
+provides the full per-species inventory. Report a distinct input-protein
+count separately from target/aspect and target/aspect/GO counts: they are not
+interchangeable. The statistical collector does **not** compute predictor
+Fmax, Smin, precision, recall or method rankings.
 
-Biologically identical original targets assigned a common original UniProt
-accession can be coalesced by the canonical benchmark. The adapter uses the
-verified duplicate-target ledger to project that canonical result back to
-**each** original FASTA ID and reports the expanded user-ID counts separately
-from canonical counts. It never collapses missing-accession targets.
+### Original FASTA header contract
 
-The report lists the producer-reported UniProt FULL and GOA normalization
-counters separately for START and END (with their original counter names),
-target-survival statistics, GO EVAL/SKIP counts per aspect, species-TaxID
-representation, documentary evidence class, and source provenance. Taxonomy
-names may not be available, so the report uses unambiguous resolved species
-NCBI TaxIDs. No metric/ROC tool is run and no unknown GO pair is labeled as
-a biological true negative.
+The `query_id` in the annotation TSVs is the **first whitespace-delimited
+token** after `>` in the user's original FASTA. The exported FASTA preserves
+the **entire original header**, including its description or the TAB-delimited
+NCBI TaxID, whereas `DATASET/targets/targets.fasta` is the internal FASTA
+with `T000...` identifiers. Thus `>Q9CQV8<TAB>10090` produces user ID
+`Q9CQV8`. `>sp P02397 description` instead produces user ID `sp`, not
+`P02397`; multiple different targets with this first token conflict.
+User-provided identifiers must be unique for distinct records. The
+standalone strict Stage 00 importer allows deduplication only for identical
+ID, sequence and TaxID, and records its rejected duplicates.
+
+The original ID is *not* automatically interpreted as a UniProt accession.
+If it is a real accession, select the explicit accession mode during setup.
+
+### EVAL, SKIP, NEUTRAL and cohort semantics
+
+Evaluate only `(query_id, aspect)` pairs listed in `target_aspects.tsv`.
+Within an eligible aspect, an above-threshold EVAL prediction is a TP and a
+missing EVAL prediction is an FN. SKIP and NEUTRAL are two distinct masks:
+neither contributes to TP/FP/FN and neither establishes biological absence.
+A valid, unmasked prediction not found in EVAL is an **operational benchmark
+FP** for that eligible aspect, not a proven biological false assertion.
+Explicit GO `NOT` evidence is preserved for review, not converted silently
+into a biological true-negative population.
+
+Validate scores and IDs, merge duplicate predictions by maximum, propagate
+prediction scores upward using the same frozen GO graph and relation policy,
+then apply the masks. **Do not stop propagation at a masked ancestor.**
+Exclude ontology roots and invalid/unmapped terms under the evaluator's
+explicit policy. Report Fmax and coverage separately by aspect and cohort;
+full evaluation includes eligible proteins without predictions. Smin requires
+an independently pinned and certified information-accretion table.
+
+NK (no experimental knowledge in START), LK (experimental knowledge in another
+aspect but none in the assessed aspect) and PK (experimental knowledge already
+in the assessed aspect) are **target/aspect categories**, not synonyms for
+per-term NOVEL or CONFIRMATION. Current `target_cohorts.tsv` sets
+`knowledge_class=UNCLASSIFIED` until an independent, target-attributed START
+experimental evidence audit is certified. Transferred donor evidence cannot
+by itself establish NK/LK/PK. Do not claim NK/LK/PK-stratified predictor
+metrics from this publication yet.
+
+### Scientific interpretation and traceability
+
+The collector counts all EVAL reasons from `term_audit.tsv`; direct END
+SCORE EVAL events are counted separately from `temporal_events.tsv`. Terms
+may be EVAL by GO propagation without direct source support at that exact
+term. `evidence_by_release.tsv` provides M8 *aggregate* evidence inventories,
+not per-target direct experimental annotation attribution. The current
+collector cannot quantify documentary END-to-START look-ahead from those
+aggregates; it reports `NOT_MEASURABLE_FROM_AGGREGATES`. Any retrospective
+identification must be evaluated with a dedicated provenance audit.
+
+For a detailed explanation see
+[`PROGENY_POSTRUN_PUBLISHER_USER_GUIDE.md`](PROGENY_POSTRUN_PUBLISHER_USER_GUIDE.md)
+and the independent publication contract in
+[`PROGENY_POSTRUN_PUBLISHER_IMPLEMENTATION.md`](PROGENY_POSTRUN_PUBLISHER_IMPLEMENTATION.md).
 
 ## Before real CAFA5 production
 

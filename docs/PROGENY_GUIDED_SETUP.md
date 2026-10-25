@@ -102,6 +102,56 @@ The source inputs remain in their original folders and are never modified.
 The wizard requires new output directories and physical (non-symlinked) paths.
 It never runs `git commit`, `git push`, or an unrelated existing workflow.
 
+## After successful execution: find your benchmark
+
+The generated `START_PROGENY.sh` runs the complete scientific DAG and,
+**only after successful Snakemake completion**, invokes the independent
+scientific collector. The results are at:
+
+```text
+YOUR-RUN/results/benchmark/
+  ground_truth_targets.fasta
+  benchmark_terms.tsv
+  target_aspects.tsv
+  target_cohorts.tsv
+  species_statistics.tsv
+  statistics.json
+  report.html
+  EVALUATION_LEGEND.md
+  manifest.json
+```
+
+Open `report.html` offline to view the overview and follow the links to the
+machine-readable tables. `ground_truth_targets.fasta` has the *full original*
+user FASTA headers, and the TSV annotations use only the *first token* before
+space/TAB as their protein ID. An input such as `>sp P02397 description` has
+ID `sp`, not `P02397`. Different proteins must not share this first token.
+The normalized FASTA under `DATASET/targets/targets.fasta` correctly retains
+internal `T000...` IDs and is not the file for predictor submission.
+
+`benchmark_terms.tsv` includes all propagated EVAL/SKIP/NEUTRAL for eligible
+(target, aspect) pairs. The first class is scored positive truth; the latter
+two are masks, not biological negatives. A protein may be evaluable in only
+one GO aspect. Species are grouped by the *target's* resolved species TaxID.
+
+Current NK/LK/PK cohorts remain `UNCLASSIFIED` pending a separately audited
+START experimental annotation classifier. The collector creates ground truth
+and a report, **not** predictor Fmax/Smin scores. For details see
+[`PROGENY_POSTRUN_PUBLISHER_USER_GUIDE.md`](PROGENY_POSTRUN_PUBLISHER_USER_GUIDE.md).
+
+If the canonical controller was used without `START_PROGENY.sh`, invoke the
+same independent post-run publisher after scientific certificate PASS:
+
+```bash
+pixi run python scripts/installation/publish_progeny_scientific_results.py \
+  --dataset /absolute/path/to/study-dataset \
+  --run /absolute/path/to/study-run
+```
+
+The collector verifies and reuses an existing publication only when its
+recorded input/output checksums are unchanged. It never reruns the scientific
+DAG and never overwrites canonical inputs or scientific outputs.
+
 ## Limits and scientific interpretation
 
 - A successful wizard is a *validated preparation*, not evidence that the
