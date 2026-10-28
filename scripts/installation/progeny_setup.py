@@ -777,6 +777,23 @@ def create_project(options: dict, *, repo: Path, build_missing: bool = True) -> 
     dataset = _physical_new(options["dataset_dir"], "Dataset folder")
     run = _physical_new(options["run_dir"], "Run folder")
     inputs = _inspect_inputs(options, repo, dataset, run)
+    shared_root = dataset.parent / "PROGENY_SHARED"
+    if shared_root.is_symlink() or (shared_root.exists() and not shared_root.is_dir()):
+        raise ValueError("PROGENY_SHARED must be a real directory or not exist")
+    if shared_root.absolute() != shared_root.resolve(strict=False):
+        raise ValueError("PROGENY_SHARED path must not contain symlinks")
+    for generated in (dataset, run):
+        _disjoint(shared_root, generated, "shared artifacts/generated roots")
+    _disjoint(shared_root, repo, "shared artifacts/source checkout")
+    for source in inputs.values():
+        source_parent = source.parent.resolve(strict=True)
+        if shared_root.is_relative_to(source_parent) or source_parent.is_relative_to(
+            shared_root
+        ):
+            raise ValueError(
+                "Choose a study base whose PROGENY_SHARED directory is separate "
+                f"from biological input directories: {source_parent}"
+            )
     print("Input files and scientific choices: initial validation PASS", flush=True)
     tools = _verify_native(repo, build_missing=build_missing)
     dataset.mkdir(mode=0o700)
@@ -832,6 +849,24 @@ def create_project(options: dict, *, repo: Path, build_missing: bool = True) -> 
             repo, inputs, policies, options, tools, pipeline
         )
         identity = hashlib.sha256(_json_bytes(identity_details)).hexdigest()
+        start_gaf_sha = identity_details["input_sha256"]["START.goa"]
+        if prepared_goa["START"] != inputs["START.goa"]:
+            start_gaf_sha = _hash(prepared_goa["START"])
+        shared_root.mkdir(mode=0o700, exist_ok=True)
+        start_ia_root = (
+            shared_root
+            / "START"
+            / options["releases"]["START"]["release_id"]
+            / "information_accretion"
+        )
+        start_ia_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (shared_root / "RUNS").mkdir(mode=0o700, exist_ok=True)
+        (shared_root / "native" / "ia-roaring").mkdir(
+            mode=0o700, parents=True, exist_ok=True
+        )
+        (shared_root / "scratch" / "ia-roaring").mkdir(
+            mode=0o700, parents=True, exist_ok=True
+        )
         limits = {
             field: options[field]
             for field in (
@@ -942,6 +977,11 @@ def create_project(options: dict, *, repo: Path, build_missing: bool = True) -> 
             "dataset": str(dataset),
             "run": str(run),
             "identity_sha256": identity,
+            "shared_artifacts_root": str(shared_root),
+            "start_ia_root": str(start_ia_root),
+            "start_release_id": options["releases"]["START"]["release_id"],
+            "start_gaf_sha256": start_gaf_sha,
+            "ontology_sha256": pipeline["ontology"]["expected_sha256"],
             "launch_script": str(launcher),
             "launch_options": launch,
             "preparer": result,
@@ -962,6 +1002,7 @@ def create_project(options: dict, *, repo: Path, build_missing: bool = True) -> 
         raise
     print(f"\nPROGENY_SETUP=READY\nDATASET={dataset}\nRUN={run}")
     print(f"CONTENT_IDENTITY={identity}")
+    print(f"SHARED_ARTIFACTS={shared_root}")
     print("NO_JOB_STARTED=YES")
     print(f"LAUNCH_INSTRUCTIONS={launch['instructions']}")
     for mode, command in launch["commands"].items():

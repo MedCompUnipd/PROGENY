@@ -33,6 +33,9 @@ The native compilation uses the pinned GCC toolchain on the supported Linux
 platform. See `docs/PROGENY_NATIVE_RELEASE_TOOLCHAIN.md` for build provenance.
 Do **not** put raw data, preprocessed inputs, intermediate files or published
 results in `/work/PROGENY`. Keep datasets and run roots outside the checkout.
+Run `pixi run test` for the full suite; this builds all thirteen canonical
+native tools and the pinned Roaring test executable before pytest, so required
+native integration tests do not silently skip.
 
 ## Start a new PROGENY study — guided setup
 
@@ -99,11 +102,55 @@ sequences), propagated `benchmark_terms.tsv` with **EVAL/SKIP/NEUTRAL**,
 `report.html`, metric-mask instructions and a SHA-256 publication manifest.
 The first whitespace-delimited FASTA token becomes the TSV `query_id`;
 internal `T000...` IDs remain unchanged in the scientific pipeline. NK/LK/PK
-cohorts currently remain `UNCLASSIFIED` pending direct START evidence audit.
-No predictor Fmax or Smin is computed by the collector. The canonical DAG is
-unchanged and the publisher can be rerun independently after certificate PASS.
+labels in this canonical publication remain `UNCLASSIFIED`; the separately
+published START knowledge-cohort artifact classifies target-aspects from
+accepted donor evidence under its versioned policy. No predictor Fmax or Smin
+is computed by the collector. The canonical DAG is unchanged and the publisher
+can be rerun independently after certificate PASS.
 See [the post-run user guide](docs/PROGENY_POSTRUN_PUBLISHER_USER_GUIDE.md)
 for outputs and the precise semantics of EVAL/SKIP/NEUTRAL.
+
+## Prepare and run prediction evaluation
+
+Prediction evaluation is separate from benchmark generation. After the
+generated launcher has completed and the benchmark publication is available,
+prepare the standalone evaluation artifacts once:
+
+```bash
+pixi run prepare-evaluation \
+  --dataset /path/to/study-dataset \
+  --run /path/to/study-run
+```
+
+This reads START GOA and the pinned ontology from setup metadata, then validates
+or computes IA and publishes the run-specific NK/LK/PK cohort artifact. The
+installer creates a shared `PROGENY_SHARED` directory beside the dataset and
+run. IA is stored there by a fingerprint of START release, GOA, ontology,
+policy and implementation, so parameterized runs with the same identity reuse
+it. Cohorts are scoped to their certified benchmark manifest. The command runs
+synchronously and does not modify benchmark receipts or rerun Snakemake.
+
+Evaluate multiple prediction files and redraw comparison outputs without
+recomputing IA:
+
+```bash
+pixi run compare-predictions \
+  --dataset /path/to/study-dataset \
+  --run /path/to/study-run \
+  --method method_a=/path/to/method_a.tsv \
+  --method method_b=/path/to/method_b.tsv \
+  --aspect F --aspect P --aspect C \
+  --output-dir /path/to/new/evaluation-output
+```
+
+The evaluator resolves the matching IA and cohort artifacts automatically,
+checks their manifests and checksums, and stops with the preparation command
+if an artifact is missing or inconsistent. Prediction input format, filters,
+metrics and output tables are described in
+[`PROGENY_PREDICTION_INPUTS_V1.md`](docs/PROGENY_PREDICTION_INPUTS_V1.md),
+[`PROGENY_PREDICTION_METRICS_M3.md`](docs/PROGENY_PREDICTION_METRICS_M3.md)
+and [`PROGENY_EVALUATION_PREPARATION_V1.md`](
+docs/PROGENY_EVALUATION_PREPARATION_V1.md).
 
 Two configuration levels are supported. Guided Setup keeps the reviewed
 reference experimental evidence profile as its default and displays a

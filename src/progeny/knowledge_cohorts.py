@@ -27,13 +27,14 @@ def assign_knowledge_classes(
     resolve_go: Callable[[str], tuple[str | None, str]],
     go_aspect: Callable[[str], str],
 ) -> tuple[list[dict[str, str | int]], list[dict[str, str]], dict[str, int]]:
-    """Classify every eligible target/aspect from exact direct START SCORE rows.
+    """Classify eligible pairs from target-attributed START SCORE evidence.
 
-    Input evidence rows must already be restricted to the START release, the
-    target's exact original accession, positive polarity and SCORE evidence
-    codes. Donor-transfer annotations and GO closure rows are not evidence for
-    this classification. Replaced GO terms are accepted only when their unique
-    active replacement stays in the source aspect.
+    Input evidence rows must already be restricted to the START release,
+    M8-accepted assertions attributed to the target's internal ID, positive
+    polarity and SCORE evidence codes. A donor accession can differ from the
+    target's external FASTA identifier. GO closure rows are not classification
+    evidence. Replaced GO terms are accepted only when their active replacement
+    stays in the source aspect.
     """
     if not eligible or not isinstance(eligible, Set):
         raise ValueError("Eligible target-aspect population must be a nonempty set")
@@ -189,17 +190,19 @@ def load_published_cohorts(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         raise ValueError("Knowledge cohort manifest must be a JSON object")
-    if manifest.get("schema") != "progeny-start-knowledge-cohorts-v1":
+    if manifest.get("schema") != "progeny-start-knowledge-cohorts-v2":
         raise ValueError("Unsupported knowledge cohort schema")
     if manifest.get("status") != "PUBLISHED":
         raise ValueError("Knowledge cohort publication is not complete")
     expected_policy = {
         "classification_policy": (
-            "exact_target_positive_direct_START_SCORE_evidence_by_aspect_v1"
+            "accepted_target_positive_START_SCORE_evidence_by_aspect_v2"
         ),
         "score_evidence_codes": sorted(SCORE_EVIDENCE_CODES),
         "not_policy": "NOT_excluded",
-        "donor_policy": "donor_accession_must_equal_original_target_accession",
+        "donor_policy": (
+            "M8_accepted_donor_assertions_attributed_by_internal_target_id"
+        ),
         "propagation_policy": "direct_source_GO_only_no_closure",
         "replacement_policy": (
             "accept_only_unambiguous_active_replacement_in_same_aspect"
@@ -337,7 +340,7 @@ def load_published_cohorts(
                 raise ValueError("Unknown direct START GO audit disposition")
             if (
                 row["release_id"] != manifest.get("start_release")
-                or row["donor_accession"] != row["original_id"]
+                or not row["donor_accession"]
                 or row["polarity"] != "POSITIVE"
                 or not row["normalized_gaf_line"].isdecimal()
                 or row["original_id"] not in cohort_internal_ids

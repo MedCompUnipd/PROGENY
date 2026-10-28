@@ -119,12 +119,27 @@ def test_guided_creates_complete_fresh_run(configured):
     assert output["status"] == "READY"
     run = Path(answers["run_dir"])
     data = Path(answers["dataset_dir"])
+    shared = data.parent / "PROGENY_SHARED"
     assert run.is_dir()
     parsed = read_recipe(run / "fresh_recipe.json", expected_repo=repo)
     assert parsed.data.keys() >= RECIPE_FIELDS
     assert parsed.data["policy"] == "same_species_exact"
     assert parsed.pipeline["releases"]["START"]["release_id"] == "2023_01"
     assert (data / "config/scientific-identity-inventory.json").is_file()
+    summary = json.loads(
+        (data / "config/setup-summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["shared_artifacts_root"] == str(shared)
+    assert summary["start_ia_root"] == str(
+        shared / "START/2023_01/information_accretion"
+    )
+    for relative in (
+        "START/2023_01/information_accretion",
+        "RUNS",
+        "native/ia-roaring",
+        "scratch/ia-roaring",
+    ):
+        assert (shared / relative).is_dir()
     assert (data / "targets/00_manifest.json").is_file()
     assert (data / "START_PROGENY.sh").is_file()
     assert "--directory " + str(run) in (data / "START_PROGENY.sh").read_text()
@@ -436,7 +451,7 @@ def test_alpha_original_header_ledger_and_export_launcher(configured):
 
 def test_alpha_advanced_config_applies_policy_and_runtime(configured):
     answers, repo = configured
-    parent = Path(answers["dataset_dir"]).parent
+    parent = Path(answers["targets_fasta"]).parent
     original_policy = repo / "config/stage08_evidence_classes_v2.example.json"
     custom_policy = parent / "custom-evidence-policy.json"
     custom_policy.write_bytes(original_policy.read_bytes())

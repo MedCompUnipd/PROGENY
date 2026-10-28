@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compute experimental native Roaring IA with unchanged scientific v3 policy."""
+"""Compute START Information Accretion with the pinned native Roaring backend."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import json
 import sys
 from pathlib import Path
 
+from progeny.evaluation_artifacts import ia_fingerprint
 from progeny.information_accretion import write_information_accretion
 from progeny.information_accretion_roaring import (
     calculate_information_accretion_roaring,
@@ -67,6 +68,7 @@ def main() -> None:
     graph = GoClosureIndex.from_gene_ontology(ontology)
     implementation = [
         Path(__file__),
+        repository / "src/progeny/evaluation_artifacts.py",
         repository / "src/progeny/information_accretion_roaring.py",
         repository / "src/progeny/information_accretion.py",
         repository / "src/progeny/ontology.py",
@@ -97,6 +99,13 @@ def main() -> None:
             "source_release_id": args.release_id,
             "gaf_path": str(args.gaf),
             "implementation_sha256": hashes,
+            "artifact_fingerprint": ia_fingerprint(
+                {
+                    "release_id": args.release_id,
+                    "gaf_sha256": args.gaf_sha256.lower(),
+                    "ontology_sha256": ontology_sha,
+                }
+            ),
         }
     )
     output.mkdir()
