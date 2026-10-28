@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the isolated, pinned experimental CRoaring IA executable."""
+"""Build the pinned CRoaring executable used by standalone IA preparation."""
 
 from __future__ import annotations
 
@@ -40,6 +40,13 @@ def main() -> None:
     ninja = shutil.which("ninja")
     if cmake is None or ninja is None:
         raise ValueError("Run this builder inside the locked Pixi environment")
+    pixi_bin = (repository / ".pixi/envs/default/bin").resolve(strict=True)
+    cmake_path = Path(cmake).resolve(strict=True)
+    ninja_path = Path(ninja).resolve(strict=True)
+    if not cmake_path.is_relative_to(pixi_bin) or not ninja_path.is_relative_to(
+        pixi_bin
+    ):
+        raise ValueError("CMake and Ninja must come from the locked Pixi environment")
     build = args.build_dir.absolute()
     if build.exists() or build.is_symlink():
         raise ValueError("Build directory must be new")
@@ -89,7 +96,11 @@ def main() -> None:
         "cxx_compiler": str(cxx),
         "c_compiler_sha256": sha(cc),
         "cxx_compiler_sha256": sha(cxx),
+        "cmake_sha256": sha(cmake_path),
+        "ninja_sha256": sha(ninja_path),
         "croaring_lock_sha256": sha(lock_path),
+        "builder_sha256": sha(Path(__file__)),
+        "pixi_lock_sha256": sha(repository / "pixi.lock"),
         "source_sha256": {
             str(p.relative_to(repository)): sha(p)
             for p in [experiment / "CMakeLists.txt", experiment / "src/main.cpp"]

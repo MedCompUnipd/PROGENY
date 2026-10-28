@@ -15,6 +15,13 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from progeny.alpha_identity import _sha
+from progeny.evaluation_artifacts import (
+    ia_artifact_dir,
+    ia_fingerprint,
+    run_cohort_dir,
+    start_identity,
+    validate_ia_artifact,
+)
 from progeny.knowledge_cohorts import load_published_cohorts, select_eligible_pairs
 from progeny.ontology import GO_ROOTS
 from progeny.prediction_inputs import load_benchmark_inputs
@@ -68,7 +75,9 @@ PLOT_METRICS = {
 }
 IMPLEMENTATION_FILES = (
     "scripts/evaluation/compare_predictions.py",
+    "scripts/evaluation/prepare_evaluation.py",
     "scripts/evaluation/publish_start_knowledge_cohorts.py",
+    "src/progeny/evaluation_artifacts.py",
     "src/progeny/prediction_weighted_metrics.py",
     "src/progeny/prediction_plotting.py",
     "src/progeny/information_accretion.py",
@@ -316,11 +325,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--run", type=Path, required=True)
-    parser.add_argument("--ontology", type=Path, required=True)
-    parser.add_argument("--benchmark-sha256", required=True)
-    parser.add_argument("--ia-table", type=Path, required=True)
-    parser.add_argument("--ia-manifest", type=Path, required=True)
-    parser.add_argument("--cohorts", type=Path, required=True)
+    parser.add_argument("--ontology", type=Path)
+    parser.add_argument("--benchmark-sha256")
+    parser.add_argument("--ia-table", type=Path)
+    parser.add_argument("--ia-manifest", type=Path)
+    parser.add_argument("--cohorts", type=Path)
     parser.add_argument("--method", action="append", required=True)
     parser.add_argument("--threshold-step", default="0.01")
     parser.add_argument("--aspect", type=_aspect_code, action="append", required=True)
@@ -328,6 +337,8 @@ def main() -> None:
     parser.add_argument("--taxid", action="append")
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
+    if (args.ia_table is None) != (args.ia_manifest is None):
+        parser.error("--ia-table and --ia-manifest must be supplied together")
     methods = [_method_spec(value) for value in args.method]
     if len(methods) < 2 or len({method for method, _ in methods}) != len(methods):
         parser.error("Provide at least two prediction files with distinct method IDs")
@@ -358,20 +369,64 @@ def main() -> None:
             continue
         raise ValueError("Evaluation output must be outside dataset and run roots")
 
+    dataset = args.dataset.resolve(strict=True)
+    run = args.run.resolve(strict=True)
+    start_spec = dataset / "config/fresh-spec.json"
+    start = start_identity(dataset) if start_spec.is_file() else None
+    if start is None and (args.ia_table is None or args.cohorts is None):
+        raise ValueError(
+            "Setup metadata is required to resolve managed evaluation artifacts"
+        )
+    benchmark_manifest_path = run / "results/benchmark/manifest.json"
+    if benchmark_manifest_path.is_symlink() or not benchmark_manifest_path.is_file():
+        raise ValueError("Certified benchmark publication is not available")
+    benchmark_sha = args.benchmark_sha256 or _sha(benchmark_manifest_path)
+    if _sha(benchmark_manifest_path) != benchmark_sha:
+        raise ValueError("Benchmark manifest checksum does not match the run")
+    ontology_path = args.ontology
+    if ontology_path is None and start is not None:
+        ontology_path = start["ontology_path"]
+    if ontology_path is None:
+        raise ValueError("Supply --ontology when setup metadata is unavailable")
     benchmark = load_benchmark_inputs(
-        dataset=args.dataset,
-        run=args.run,
-        ontology_path=args.ontology,
-        benchmark_sha256=args.benchmark_sha256,
+        dataset=dataset,
+        run=run,
+        ontology_path=ontology_path,
+        benchmark_sha256=benchmark_sha,
     )
+    if args.ia_table is None:
+        ia_dir = ia_artifact_dir(dataset, start)
+        try:
+            ia_table, ia_manifest_path = validate_ia_artifact(ia_dir, start)
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                "A matching START Information Accretion artifact is required. "
+                "Run `pixi run prepare-evaluation --dataset DATASET --run RUN` "
+                "before evaluating predictions."
+            ) from exc
+    else:
+        ia_table = args.ia_table
+        ia_manifest_path = args.ia_manifest
+    cohorts_dir = args.cohorts or run_cohort_dir(dataset, run, benchmark_sha)
+    if not cohorts_dir.is_dir():
+        raise ValueError(
+            "A matching START knowledge-cohort publication is required. "
+            "Run `pixi run prepare-evaluation --dataset DATASET --run RUN` "
+            "before evaluating predictions."
+        )
     cohort_rows, cohort_manifest = load_published_cohorts(
-        args.cohorts,
+        cohorts_dir,
         eligible=benchmark.eligible,
         species=benchmark.species,
         provenance=benchmark.provenance,
     )
-    cohort_table_sha = _sha(args.cohorts / "knowledge_cohorts.tsv")
-    cohort_manifest_sha = _sha(args.cohorts / "manifest.json")
+    if start is not None and (
+        cohort_manifest.get("start_release") != start["release_id"]
+        or cohort_manifest.get("start_gaf_sha256") != start["gaf_sha256"]
+    ):
+        raise ValueError("Knowledge cohorts do not match this dataset's START")
+    cohort_table_sha = _sha(cohorts_dir / "knowledge_cohorts.tsv")
+    cohort_manifest_sha = _sha(cohorts_dir / "manifest.json")
     taxids = _taxid_filter(args.taxid)
     selected_aspects = tuple(dict.fromkeys(args.aspect))
     selected_eligible, knowledge_labels = select_eligible_pairs(
@@ -395,15 +450,36 @@ def main() -> None:
             for knowledge in ("NK", "LK", "PK")
         },
     }
-    ia_manifest_sha = _sha(args.ia_manifest)
+    ia_manifest_sha = _sha(ia_manifest_path)
     weights, ia_manifest = _read_ia(
-        args.ia_table,
-        args.ia_manifest,
+        ia_table,
+        ia_manifest_path,
         benchmark.provenance["ontology_sha256"],
         benchmark.graph,
     )
+    expected_release = (
+        start["release_id"] if start is not None else cohort_manifest["start_release"]
+    )
+    expected_gaf = (
+        start["gaf_sha256"]
+        if start is not None
+        else cohort_manifest["start_gaf_sha256"]
+    )
+    if (
+        ia_manifest.get("source_release_id") != expected_release
+        or ia_manifest.get("gaf_sha256") != expected_gaf
+    ):
+        raise ValueError("IA manifest does not match the START identity")
+    fingerprint = ia_manifest.get("artifact_fingerprint")
+    if fingerprint is not None:
+        if start is None:
+            raise ValueError(
+                "Setup metadata is required to verify the IA artifact fingerprint"
+            )
+        if fingerprint != ia_fingerprint(start):
+            raise ValueError("IA artifact fingerprint does not match this installation")
     ia_table_sha = ia_manifest["ia_table_sha256"]
-    if _sha(args.ia_manifest) != ia_manifest_sha:
+    if _sha(ia_manifest_path) != ia_manifest_sha:
         raise ValueError("IA manifest changed during validation")
     reports = {}
     curve_rows = []
@@ -548,16 +624,16 @@ def main() -> None:
             newline="\n",
         )
         plot_inventory.append(pr_path.relative_to(working_dir).as_posix())
-    if _sha(args.ia_table) != ia_table_sha or _sha(args.ia_manifest) != ia_manifest_sha:
+    if _sha(ia_table) != ia_table_sha or _sha(ia_manifest_path) != ia_manifest_sha:
         raise ValueError("IA artifact changed during evaluation")
     if (
-        _sha(args.cohorts / "knowledge_cohorts.tsv") != cohort_table_sha
-        or _sha(args.cohorts / "manifest.json") != cohort_manifest_sha
+        _sha(cohorts_dir / "knowledge_cohorts.tsv") != cohort_table_sha
+        or _sha(cohorts_dir / "manifest.json") != cohort_manifest_sha
     ):
         raise ValueError("Knowledge cohort publication changed during evaluation")
-    if _sha(args.ontology) != benchmark.provenance["ontology_sha256"]:
+    if _sha(ontology_path) != benchmark.provenance["ontology_sha256"]:
         raise ValueError("Pinned ontology changed during evaluation")
-    if _sha(args.run / "results/benchmark/manifest.json") != args.benchmark_sha256:
+    if _sha(benchmark_manifest_path) != benchmark_sha:
         raise ValueError("Benchmark manifest changed during evaluation")
     implementation_after = {
         name: _sha(repository / name) for name in IMPLEMENTATION_FILES
@@ -580,7 +656,7 @@ def main() -> None:
     report = {
         "schema": SCHEMA,
         "status": "EVALUATED",
-        "benchmark_sha256": args.benchmark_sha256,
+        "benchmark_sha256": benchmark_sha,
         "ontology_sha256": benchmark.provenance["ontology_sha256"],
         "ia_manifest_sha256": ia_manifest_sha,
         "ia_table_sha256": ia_table_sha,
@@ -599,7 +675,7 @@ def main() -> None:
             sorted(args.knowledge) if args.knowledge else ["NK", "LK", "PK"]
         ),
         "taxids": sorted(taxids) if taxids else None,
-        "cohort_manifest_sha256": _sha(args.cohorts / "manifest.json"),
+        "cohort_manifest_sha256": _sha(cohorts_dir / "manifest.json"),
         "cohort_table_sha256": cohort_table_sha,
         "cohort_manifest_schema": cohort_manifest["schema"],
         "selected_target_aspects": len(selected_eligible),

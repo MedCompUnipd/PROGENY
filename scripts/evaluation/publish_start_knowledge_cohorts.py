@@ -21,7 +21,7 @@ from progeny.knowledge_cohorts import SCORE_EVIDENCE_CODES, assign_knowledge_cla
 from progeny.ontology import TermStatus
 from progeny.prediction_inputs import _read_json, _tsv, load_benchmark_inputs
 
-SCHEMA = "progeny-start-knowledge-cohorts-v1"
+SCHEMA = "progeny-start-knowledge-cohorts-v2"
 COHORT_FIELDS = (
     "original_id",
     "internal_target_id",
@@ -95,6 +95,54 @@ def _checked_m10c(database: Path, manifest_path: Path, expected_manifest: str) -
     ) != _digest(database):
         raise ValueError("M10C direct provenance database checksum mismatch")
     return manifest
+
+
+def _query_target_score_evidence(
+    connection: sqlite3.Connection,
+    *,
+    release: str,
+    target_identity: dict[str, str],
+    target_ids: set[str],
+) -> list[dict[str, str]]:
+    """Read positive START SCORE assertions linked to each internal target.
+
+    M10C contains assertions from accepted donors attributed to the target by
+    the certified M8 lineage. Donor accession therefore need not equal the
+    target's external FASTA identifier.
+    """
+    rows = []
+    placeholders = ",".join("?" for _ in SCORE_EVIDENCE_CODES)
+    query = (
+        "SELECT aspect, source_go, evidence_code, rid, assertion_id, "
+        "normalized_gaf_line, gaf_relation, gaf_qualifier, donor_accession "
+        "FROM direct_support WHERE release=? AND target_id=? "
+        "AND polarity='POSITIVE' "
+        f"AND evidence_code IN ({placeholders}) "
+        "ORDER BY aspect, source_go, evidence_code, rid, assertion_id"
+    )
+    score_codes = tuple(sorted(SCORE_EVIDENCE_CODES))
+    for original_id in sorted(target_ids):
+        internal = target_identity[original_id]
+        parameters = (release, internal, *score_codes)
+        for row in connection.execute(query, parameters):
+            rows.append(
+                {
+                    "original_id": original_id,
+                    "aspect": row["aspect"],
+                    "go_id": row["source_go"],
+                    "evidence_code": row["evidence_code"],
+                    "rid": str(row["rid"]),
+                    "assertion_id": row["assertion_id"],
+                    "release_id": release,
+                    "internal_target_id": internal,
+                    "donor_accession": row["donor_accession"],
+                    "polarity": "POSITIVE",
+                    "normalized_gaf_line": str(row["normalized_gaf_line"]),
+                    "gaf_relation": row["gaf_relation"],
+                    "gaf_qualifier": row["gaf_qualifier"],
+                }
+            )
+    return rows
 
 
 def main() -> None:
@@ -173,42 +221,12 @@ def main() -> None:
         }
         if not required <= columns:
             raise ValueError("Unexpected M10C direct_support schema")
-        evidence_rows = []
-        placeholders = ",".join("?" for _ in SCORE_EVIDENCE_CODES)
-        for original_id in sorted(benchmark.target_ids):
-            internal = target_identity[original_id]
-            query = (
-                "SELECT aspect, source_go, evidence_code, rid, assertion_id, "
-                "normalized_gaf_line, gaf_relation, gaf_qualifier, donor_accession "
-                "FROM direct_support WHERE release=? AND target_id=? "
-                "AND polarity='POSITIVE' AND donor_accession=? "
-                f"AND evidence_code IN ({placeholders}) "
-                "ORDER BY aspect, source_go, evidence_code, rid, assertion_id"
-            )
-            parameters = (
-                release,
-                internal,
-                original_id,
-                *sorted(SCORE_EVIDENCE_CODES),
-            )
-            for row in connection.execute(query, parameters):
-                evidence_rows.append(
-                    {
-                        "original_id": original_id,
-                        "aspect": row["aspect"],
-                        "go_id": row["source_go"],
-                        "evidence_code": row["evidence_code"],
-                        "rid": str(row["rid"]),
-                        "assertion_id": row["assertion_id"],
-                        "release_id": release,
-                        "internal_target_id": internal,
-                        "donor_accession": row["donor_accession"],
-                        "polarity": "POSITIVE",
-                        "normalized_gaf_line": str(row["normalized_gaf_line"]),
-                        "gaf_relation": row["gaf_relation"],
-                        "gaf_qualifier": row["gaf_qualifier"],
-                    }
-                )
+        evidence_rows = _query_target_score_evidence(
+            connection,
+            release=release,
+            target_identity=target_identity,
+            target_ids=benchmark.target_ids,
+        )
     finally:
         connection.close()
 
@@ -274,11 +292,13 @@ def main() -> None:
             "schema": SCHEMA,
             "status": "PUBLISHED",
             "classification_policy": (
-                "exact_target_positive_direct_START_SCORE_evidence_by_aspect_v1"
+                "accepted_target_positive_START_SCORE_evidence_by_aspect_v2"
             ),
             "score_evidence_codes": sorted(SCORE_EVIDENCE_CODES),
             "not_policy": "NOT_excluded",
-            "donor_policy": "donor_accession_must_equal_original_target_accession",
+            "donor_policy": (
+                "M8_accepted_donor_assertions_attributed_by_internal_target_id"
+            ),
             "propagation_policy": "direct_source_GO_only_no_closure",
             "replacement_policy": (
                 "accept_only_unambiguous_active_replacement_in_same_aspect"

@@ -463,6 +463,18 @@ def test_native_canonical_v2_resolver_m8_with_real_dp() -> None:
     if binary is None and pinned.is_file():
         spec = json.loads(pinned.read_text(encoding="utf-8"))
         binary = spec["tools"]["full_dp_binary"]
+    if binary is not None:
+        binary_path = Path(binary)
+        if not binary_path.is_absolute():
+            binary_path = repo / binary_path
+        binary = str(binary_path)
+    if not binary or not Path(binary).is_file():
+        pixi_binary = (
+            repo / ".pixi/build/progeny-native-release-gcc14.4/"
+            "progeny-directional-glocal-full-dp-v1"
+        )
+        if pixi_binary.is_file():
+            binary = str(pixi_binary)
     if not binary or not Path(binary).is_file():
         pytest.skip("Canonical C++ DP binary is unavailable")
     check(repo, Path(binary).resolve())

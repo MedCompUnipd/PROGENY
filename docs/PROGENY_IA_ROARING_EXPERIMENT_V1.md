@@ -1,9 +1,11 @@
-# Experimental native Roaring IA backend
+# Native Roaring IA backend
 
-This backend is additive and opt-in. The original SQLite IA implementation,
-canonical workflow, thirteen native tools, Pixi environment and lock remain
-unchanged. Build and execute it in the isolated IA worktree. It is not certified
-for full-corpus production merely because fixture equivalence passes.
+This is the default standalone IA backend. It runs after benchmark publication
+and does not change the canonical workflow or its thirteen native tools. The
+supported user entry point is `pixi run prepare-evaluation`; that command
+builds or reuses the pinned executable and publishes IA outside the benchmark
+DAG. Synthetic differential tests establish implementation regression
+coverage, not full-corpus scientific equivalence.
 
 ## Scientific identity
 
@@ -12,9 +14,10 @@ manifest records a separate `progeny-ia-roaring-backend-v1` implementation
 identity. Source-GAF row audits, accepted evidence, NOT exclusion, aliases,
 replacement ambiguity, cross-aspect exclusion, graph projection, unique
 protein/GO pairs, parent conjunctions, roots, orphans and add-one smoothing
-must match the SQLite reference. IA is calculated in Python from integer
-native counts, using the same `math.log2` expression; TSV output must be
-byte-identical on the same corpus and Python runtime.
+are checked against fixtures by the test suite. IA is calculated in Python
+from integer native counts, using the specified `math.log2` expression. The
+long-running SQLite CAFA5 attempt is not a validation oracle and no production
+claim depends on its completion.
 
 Python resolves each ontology identifier and alternate identifier once and
 exports a pinned graph and resolution table. It reads the GAF in 4 MiB chunks,
@@ -56,29 +59,30 @@ explicitly recorded; it does not establish a locked server build.
 
 ## Verification and bounded performance comparison
 
-Set `PROGENY_IA_ROARING_BINARY` to the absolute executable path and run
-`tests/test_information_accretion_roaring.py`. These optional tests are skipped
-when that variable is absent; a nonexistent explicitly requested binary is an
-error. They compare complete scientific result dictionaries and IA TSV bytes
-against SQLite, including seeded random DAGs and more than 65,536 proteins.
-They also test malformed input, wrong input hash, graph cycles and overwrite
-refusal. Run the existing full suite with an isolated existing `TMPDIR` and
-build the canonical thirteen tools before accepting server validation.
+`pixi run test` builds all thirteen canonical native tools, builds CRoaring in
+isolated temporary space, sets `PROGENY_IA_ROARING_BINARY`, and runs the full
+suite. Missing native tools fail this task rather than being silently skipped.
+The Roaring tests cover result equivalence on synthetic graphs, seeded input,
+more than 65,536 proteins, malformed input, wrong input hashes, graph cycles
+and overwrite refusal. They do not establish a full corpus comparison with a
+second independent implementation.
 
-`benchmark_information_accretion_roaring.py` copies a bounded initial prefix
-(default 100,000 data rows, maximum 1,000,000), computes its digest, executes
-both implementations sequentially and requires exact scientific equality.
-It records elapsed times, speedup and native peak RSS. The full source GAF
-hash is explicitly marked NOT_REVERIFIED in this prefix experiment. A prefix
-benchmark is not a prediction of full-corpus time or peak memory.
+`benchmark_information_accretion_roaring.py` is a historical bounded-prefix
+differential/performance tool. Any SQLite comparison is informative only for
+the selected prefix; it is neither a full-corpus correctness certificate nor a
+required runtime dependency. The full source GAF hash is marked
+`NOT_REVERIFIED` in that prefix experiment.
 
 ## Full calculation and resource limits
 
-`compute_information_accretion_roaring.py` accepts the same explicit GAF,
-START role, release, ontology and expected digests as the SQLite CLI, plus
+`prepare-evaluation` derives GAF, START role, release, ontology and expected
+digests from setup metadata. The lower-level
+`compute_information_accretion_roaring.py` accepts those identities explicitly,
+plus
 `--native-binary`, `--threads` and `--max-address-space-gib`. Scratch and output
 must be outside the source checkout and input directories. Output must be
-virgin. No output publication is started until native computation and input
+virgin. The prepare command accepts the publication only after native
+computation, input checksum verification, manifest validation and table
 checksum verification succeed. Failures do not select an alternate backend.
 
 The default 128 GiB limit is Linux RLIMIT_AS on the native child, encompassing

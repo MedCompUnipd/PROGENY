@@ -6,11 +6,14 @@ ontology snapshot, eligibility, or the exact-score Fmax report.
 
 ## Information Accretion corpus
 
-The IA corpus is a caller-supplied GOA GAF snapshot explicitly labelled
-`START`. For CAFA5 the source is the configured `2023_01` GOA GAF and its
-expected SHA-256 is supplied on the command line. The evaluator reads the file
-once, computes SHA-256 during that same scan, and rejects a mismatch before
-writing an IA publication.
+The IA corpus is the configured GOA GAF snapshot explicitly labelled `START`.
+The normal workflow uses installer-owned metadata and storage; run
+`pixi run prepare-evaluation --dataset DATASET --run RUN` after the certified
+benchmark is published. This command resolves START and the pinned ontology,
+then computes or validates the immutable IA publication. Explicit GAF and IA
+paths remain available to advanced standalone tools, but the default
+multi-method evaluator resolves IA automatically and checks the source
+release, GOA, ontology and policy identities.
 
 The parser accepts GAF 2.x rows with 17 fields. It uses UniProtKB database
 object IDs as protein identities, retains all positive evidence rows including
@@ -42,10 +45,13 @@ The IA table covers every active term in the pinned graph, including terms
 with zero START observations.
 
 The 190 GB GOA source is processed sequentially. Deduplication and propagated
-protein-term memberships use a temporary SQLite database under a caller
-selected scratch root. This database is separate from the source checkout,
-dataset, run and IA output directory. The benchmark EVAL labels and END GOA
-are never read to compute IA.
+The default fast backend is the locked native Roaring implementation. Its
+temporary state is kept under the installer-managed shared scratch root,
+separate from the source checkout, dataset, run and IA output directory. The
+benchmark EVAL labels and END GOA are never read to compute IA. Synthetic
+backend tests provide implementation regression coverage; a full-corpus
+independent scientific equivalence result is not implied by those tests, and
+SQLite is not treated as the truth source.
 
 ## Weighted evaluation
 

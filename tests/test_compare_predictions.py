@@ -11,7 +11,10 @@ from pathlib import Path
 import pytest
 from test_prediction_inputs import bundle as bundle
 
-from progeny.knowledge_cohorts import SCORE_EVIDENCE_CODES
+from progeny.knowledge_cohorts import (
+    SCORE_EVIDENCE_CODES,
+    load_published_cohorts,
+)
 from progeny.ontology import GO_ROOTS
 from progeny.prediction_inputs import load_benchmark_inputs
 from progeny.prediction_plotting import render_metric_svg
@@ -135,14 +138,16 @@ def _cohort_artifacts(bundle, directory: Path) -> Path:
         for knowledge in ("NK", "LK", "PK")
     }
     manifest = {
-        "schema": "progeny-start-knowledge-cohorts-v1",
+        "schema": "progeny-start-knowledge-cohorts-v2",
         "status": "PUBLISHED",
         "classification_policy": (
-            "exact_target_positive_direct_START_SCORE_evidence_by_aspect_v1"
+            "accepted_target_positive_START_SCORE_evidence_by_aspect_v2"
         ),
         "score_evidence_codes": sorted(SCORE_EVIDENCE_CODES),
         "not_policy": "NOT_excluded",
-        "donor_policy": "donor_accession_must_equal_original_target_accession",
+        "donor_policy": (
+            "M8_accepted_donor_assertions_attributed_by_internal_target_id"
+        ),
         "propagation_policy": "direct_source_GO_only_no_closure",
         "replacement_policy": (
             "accept_only_unambiguous_active_replacement_in_same_aspect"
@@ -289,6 +294,23 @@ def test_ia_manifest_with_wrong_ontology_is_rejected(bundle, tmp_path):
     assert result.returncode != 0
     assert "Unsupported IA manifest field" in result.stderr
     assert not (tmp_path / "bad-comparison").exists()
+
+
+def test_old_exact_accession_cohort_schema_is_rejected(bundle, tmp_path):
+    benchmark = load_benchmark_inputs(**bundle)
+    cohorts = _cohort_artifacts(bundle, tmp_path / "cohorts")
+    manifest_path = cohorts / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema"] = "progeny-start-knowledge-cohorts-v1"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unsupported knowledge cohort schema"):
+        load_published_cohorts(
+            cohorts,
+            eligible=benchmark.eligible,
+            species=benchmark.species,
+            provenance=benchmark.provenance,
+        )
 
 
 def test_knowledge_filter_restricts_denominator_and_prediction_export(bundle, tmp_path):
