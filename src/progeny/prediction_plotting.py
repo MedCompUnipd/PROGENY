@@ -151,3 +151,94 @@ def render_metric_svg(
         )
     elements.append("</svg>")
     return "\n".join(elements) + "\n"
+
+
+def render_precision_recall_svg(
+    *,
+    aspect: str,
+    series: Mapping[str, Sequence[Mapping[str, float]]],
+) -> str:
+    """Render a comparative precision-recall curve for one aspect."""
+    width = WIDTH - LEFT - RIGHT
+    bottom = TOP + PLOT_HEIGHT
+    legend_rows = max(1, (len(series) + 2) // 3)
+    height = bottom + 86 + legend_rows * 22
+    elements = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" '
+        f'height="{height}" viewBox="0 0 {WIDTH} {height}">',
+        '<rect width="100%" height="100%" fill="white"/>',
+        f'<text x="{WIDTH / 2}" y="30" text-anchor="middle" '
+        'font-family="sans-serif" font-size="20" font-weight="bold">'
+        f"{html.escape(aspect)} — Precision–Recall</text>",
+    ]
+    for index in range(6):
+        fraction = index / 5
+        x = LEFT + fraction * width
+        y = TOP + (1 - fraction) * PLOT_HEIGHT
+        elements.extend(
+            [
+                f'<line x1="{LEFT}" y1="{_number(y)}" '
+                f'x2="{LEFT + width}" y2="{_number(y)}" '
+                'stroke="#dddddd" stroke-width="1"/>',
+                f'<line x1="{_number(x)}" y1="{TOP}" '
+                f'x2="{_number(x)}" y2="{bottom}" '
+                'stroke="#eeeeee" stroke-width="1"/>',
+                f'<text x="{LEFT - 12}" y="{_number(y + 4)}" '
+                'text-anchor="end" font-family="sans-serif" font-size="12">'
+                f"{fraction:.1f}</text>",
+                f'<text x="{_number(x)}" y="{bottom + 22}" '
+                'text-anchor="middle" font-family="sans-serif" font-size="12">'
+                f"{fraction:.1f}</text>",
+            ]
+        )
+    elements.extend(
+        [
+            f'<line x1="{LEFT}" y1="{bottom}" x2="{LEFT + width}" '
+            f'y2="{bottom}" stroke="#222222" stroke-width="1.5"/>',
+            f'<line x1="{LEFT}" y1="{TOP}" x2="{LEFT}" '
+            f'y2="{bottom}" stroke="#222222" stroke-width="1.5"/>',
+            f'<text x="{LEFT + width / 2}" y="{bottom + 48}" '
+            'text-anchor="middle" font-family="sans-serif" '
+            'font-size="14">Recall</text>',
+            f'<text transform="translate(24 {TOP + PLOT_HEIGHT / 2}) '
+            'rotate(-90)" text-anchor="middle" font-family="sans-serif" '
+            'font-size="14">Precision</text>',
+        ]
+    )
+    for index, (method, rows) in enumerate(sorted(series.items())):
+        points = []
+        for row in rows:
+            recall = row.get("recall")
+            precision = row.get("precision")
+            if recall is None or precision is None:
+                continue
+            x = LEFT + float(recall) * width
+            y = TOP + (1 - float(precision)) * PLOT_HEIGHT
+            points.append(f"{_number(x)},{_number(y)}")
+        if not points:
+            continue
+        color = PALETTE[index % len(PALETTE)]
+        elements.append(
+            f'<polyline fill="none" stroke="{color}" stroke-width="2" '
+            f'points="{" ".join(points)}"/>'
+        )
+        for point in points:
+            x, y = point.split(",", maxsplit=1)
+            elements.append(
+                f'<circle cx="{x}" cy="{y}" r="3" '
+                f'fill="{color}" stroke="white" stroke-width="1"/>'
+            )
+        legend_y = bottom + 78 + index // 3 * 20
+        legend_x = LEFT + index % 3 * (width / 3)
+        elements.extend(
+            [
+                f'<line x1="{legend_x}" y1="{legend_y}" '
+                f'x2="{legend_x + 24}" y2="{legend_y}" '
+                f'stroke="{color}" stroke-width="3"/>',
+                f'<text x="{legend_x + 31}" y="{legend_y + 4}" '
+                'font-family="sans-serif" font-size="12">'
+                f"{html.escape(method)}</text>",
+            ]
+        )
+    elements.append("</svg>")
+    return "\n".join(elements) + "\n"

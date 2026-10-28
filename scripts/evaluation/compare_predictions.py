@@ -15,14 +15,18 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from progeny.alpha_identity import _sha
+from progeny.knowledge_cohorts import load_published_cohorts, select_eligible_pairs
 from progeny.ontology import GO_ROOTS
 from progeny.prediction_inputs import load_benchmark_inputs
 from progeny.prediction_metrics import evaluate_scores
-from progeny.prediction_plotting import render_metric_svg
+from progeny.prediction_plotting import (
+    render_metric_svg,
+    render_precision_recall_svg,
+)
 from progeny.prediction_weighted_metrics import evaluate_weighted_scores
 from progeny.stage08_go_closure import GoClosureIndex
 
-SCHEMA = "progeny-multi-method-evaluation-v1"
+SCHEMA = "progeny-multi-method-evaluation-v2"
 NAMESPACE_ASPECT = {
     "molecular_function": "F",
     "biological_process": "P",
@@ -64,12 +68,14 @@ PLOT_METRICS = {
 }
 IMPLEMENTATION_FILES = (
     "scripts/evaluation/compare_predictions.py",
+    "scripts/evaluation/publish_start_knowledge_cohorts.py",
     "src/progeny/prediction_weighted_metrics.py",
     "src/progeny/prediction_plotting.py",
     "src/progeny/information_accretion.py",
     "src/progeny/prediction_metrics.py",
     "src/progeny/prediction_inputs.py",
     "src/progeny/prediction_contract.py",
+    "src/progeny/knowledge_cohorts.py",
 )
 
 
@@ -111,6 +117,79 @@ def _method_spec(value: str) -> tuple[str, Path]:
     ):
         raise ValueError("Invalid method specification")
     return method_id, Path(raw_path)
+
+
+def _aspect_code(value: str) -> str:
+    aliases = {"MF": "F", "BP": "P", "CC": "C"}
+    code = aliases.get(value.upper(), value.upper())
+    if code not in {"F", "P", "C"}:
+        raise argparse.ArgumentTypeError("Aspect must be MF/F, BP/P or CC/C")
+    return code
+
+
+def _knowledge_filter(value: str) -> frozenset[str] | None:
+    if value.lower() == "all":
+        return None
+    values = frozenset(part.strip().upper() for part in value.split(","))
+    if not values or "" in values or not values <= {"NK", "LK", "PK"}:
+        raise argparse.ArgumentTypeError("Knowledge must be all or a list of NK,LK,PK")
+    return values
+
+
+def _taxid_filter(values: list[str] | None) -> frozenset[str] | None:
+    if not values or (len(values) == 1 and values[0].lower() == "all"):
+        return None
+    selected = frozenset(
+        taxid.strip() for value in values for taxid in value.split(",")
+    )
+    if (
+        not selected
+        or "" in selected
+        or any(
+            not value.isascii() or not value.isdecimal() or value.startswith("0")
+            for value in selected
+        )
+    ):
+        raise ValueError("TaxID must be all or comma-separated positive integers")
+    return selected
+
+
+def _safe_method_filename(method_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", method_id)
+
+
+def _write_prepared_predictions(
+    path: Path,
+    prepared,
+    *,
+    method_id: str,
+    labels,
+    species,
+) -> None:
+    fields = (
+        "method_id",
+        "protein_id",
+        "go_term",
+        "score",
+        "aspect",
+        "knowledge_status",
+        "taxid",
+    )
+    with path.open("x", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields, delimiter="\t")
+        writer.writeheader()
+        for (query, aspect, go_id), score in sorted(prepared.scores.items()):
+            writer.writerow(
+                {
+                    "method_id": method_id,
+                    "protein_id": query,
+                    "go_term": go_id,
+                    "score": format(score, ".17g"),
+                    "aspect": aspect,
+                    "knowledge_status": labels[(query, aspect)],
+                    "taxid": species[query],
+                }
+            )
 
 
 def _read_ia(
@@ -241,9 +320,11 @@ def main() -> None:
     parser.add_argument("--benchmark-sha256", required=True)
     parser.add_argument("--ia-table", type=Path, required=True)
     parser.add_argument("--ia-manifest", type=Path, required=True)
+    parser.add_argument("--cohorts", type=Path, required=True)
     parser.add_argument("--method", action="append", required=True)
     parser.add_argument("--threshold-step", default="0.01")
-    parser.add_argument("--aspect", choices=("F", "P", "C"), action="append")
+    parser.add_argument("--aspect", type=_aspect_code, action="append", required=True)
+    parser.add_argument("--knowledge", type=_knowledge_filter, default=None)
     parser.add_argument("--taxid", action="append")
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
@@ -283,6 +364,37 @@ def main() -> None:
         ontology_path=args.ontology,
         benchmark_sha256=args.benchmark_sha256,
     )
+    cohort_rows, cohort_manifest = load_published_cohorts(
+        args.cohorts,
+        eligible=benchmark.eligible,
+        species=benchmark.species,
+        provenance=benchmark.provenance,
+    )
+    cohort_table_sha = _sha(args.cohorts / "knowledge_cohorts.tsv")
+    cohort_manifest_sha = _sha(args.cohorts / "manifest.json")
+    taxids = _taxid_filter(args.taxid)
+    selected_aspects = tuple(dict.fromkeys(args.aspect))
+    selected_eligible, knowledge_labels = select_eligible_pairs(
+        eligible=benchmark.eligible,
+        cohorts=cohort_rows,
+        knowledge=args.knowledge,
+        aspects=set(selected_aspects),
+        species=benchmark.species,
+        taxids=taxids,
+    )
+    selected_truth = {key: benchmark.truth[key] for key in selected_eligible}
+    selected_pair_counts = {
+        "by_aspect": {
+            aspect: sum(key[1] == aspect for key in selected_eligible)
+            for aspect in ("F", "P", "C")
+        },
+        "by_knowledge_class": {
+            knowledge: sum(
+                knowledge_labels[key] == knowledge for key in selected_eligible
+            )
+            for knowledge in ("NK", "LK", "PK")
+        },
+    }
     ia_manifest_sha = _sha(args.ia_manifest)
     weights, ia_manifest = _read_ia(
         args.ia_table,
@@ -293,9 +405,6 @@ def main() -> None:
     ia_table_sha = ia_manifest["ia_table_sha256"]
     if _sha(args.ia_manifest) != ia_manifest_sha:
         raise ValueError("IA manifest changed during validation")
-    selected_aspects = (
-        tuple(args.aspect) if args.aspect is not None else ("F", "P", "C")
-    )
     reports = {}
     curve_rows = []
     plot_series = {
@@ -303,6 +412,7 @@ def main() -> None:
         for aspect in ("F", "P", "C")
         if aspect in selected_aspects
     }
+    pr_plot_series = {aspect: {} for aspect in selected_aspects}
     input_fingerprints = {}
     working_dir = Path(
         tempfile.mkdtemp(prefix="progeny-evaluation-", dir=output_dir.parent)
@@ -313,24 +423,29 @@ def main() -> None:
             raise ValueError(f"Prediction file is not a regular file: {raw_path}")
         prediction_sha = _digest(prediction_path)
         prepared = benchmark.prepare(prediction_path)
+        filtered_scores = {
+            key: score
+            for key, score in prepared.scores.items()
+            if key[:2] in selected_eligible
+        }
         unweighted = evaluate_scores(
-            eligible=benchmark.eligible,
-            truth=benchmark.truth,
-            scores=prepared.scores,
+            eligible=selected_eligible,
+            truth=selected_truth,
+            scores=filtered_scores,
             species=benchmark.species,
             aspects=selected_aspects,
-            taxids=frozenset(args.taxid) if args.taxid else None,
+            taxids=None,
             thresholds=thresholds,
         )
         weighted = evaluate_weighted_scores(
-            eligible=benchmark.eligible,
-            truth=benchmark.truth,
-            scores=prepared.scores,
+            eligible=selected_eligible,
+            truth=selected_truth,
+            scores=filtered_scores,
             information_accretion=weights,
             species=benchmark.species,
             aspects=selected_aspects,
             thresholds=thresholds,
-            taxids=frozenset(args.taxid) if args.taxid else None,
+            taxids=None,
         )
         if _digest(prediction_path) != prediction_sha:
             raise ValueError(f"Prediction file changed during evaluation: {method_id}")
@@ -338,6 +453,7 @@ def main() -> None:
             "prediction_path": str(prediction_path),
             "prediction_sha256": prediction_sha,
             "preparation_counts": prepared.counts,
+            "selected_scoring_target_aspects": len(selected_eligible),
             "unweighted": {
                 aspect: {key: value for key, value in report.items() if key != "curve"}
                 for aspect, report in unweighted["aspects"].items()
@@ -355,6 +471,22 @@ def main() -> None:
                 audit_stream.write(
                     json.dumps(audit_row, sort_keys=True, allow_nan=False) + "\n"
                 )
+        filtered_predictions_path = (
+            working_dir / f"filtered_predictions_{_safe_method_filename(method_id)}.tsv"
+        )
+        filtered_prepared = type(prepared)(
+            scores=filtered_scores,
+            counts=prepared.counts,
+            go_audit=prepared.go_audit,
+        )
+        _write_prepared_predictions(
+            filtered_predictions_path,
+            filtered_prepared,
+            method_id=method_id,
+            labels=knowledge_labels,
+            species=benchmark.species,
+        )
+        reports[method_id]["filtered_predictions_file"] = filtered_predictions_path.name
         for aspect in selected_aspects:
             unweighted_curve = unweighted["aspects"][aspect]["curve"]
             weighted_curve = weighted[aspect]["curve"]
@@ -386,6 +518,10 @@ def main() -> None:
                 method_series.append(row)
             for metric in PLOT_METRICS:
                 plot_series[aspect][metric][method_id] = method_series
+            pr_plot_series[aspect][method_id] = [
+                {"recall": row["recall"], "precision": row["precision"]}
+                for row in method_series
+            ]
 
     _write_curve_table(working_dir / "curves.tsv", curve_rows)
     plots_dir = working_dir / "plots"
@@ -403,8 +539,22 @@ def main() -> None:
             )
             path.write_text(svg, encoding="utf-8", newline="\n")
             plot_inventory.append(path.relative_to(working_dir).as_posix())
+        pr_path = plots_dir / f"precision_recall_{aspect}.svg"
+        pr_path.write_text(
+            render_precision_recall_svg(
+                aspect=ASPECT_LABELS[aspect], series=pr_plot_series[aspect]
+            ),
+            encoding="utf-8",
+            newline="\n",
+        )
+        plot_inventory.append(pr_path.relative_to(working_dir).as_posix())
     if _sha(args.ia_table) != ia_table_sha or _sha(args.ia_manifest) != ia_manifest_sha:
         raise ValueError("IA artifact changed during evaluation")
+    if (
+        _sha(args.cohorts / "knowledge_cohorts.tsv") != cohort_table_sha
+        or _sha(args.cohorts / "manifest.json") != cohort_manifest_sha
+    ):
+        raise ValueError("Knowledge cohort publication changed during evaluation")
     if _sha(args.ontology) != benchmark.provenance["ontology_sha256"]:
         raise ValueError("Pinned ontology changed during evaluation")
     if _sha(args.run / "results/benchmark/manifest.json") != args.benchmark_sha256:
@@ -415,6 +565,10 @@ def main() -> None:
     if implementation_after != implementation_before:
         raise ValueError("Implementation changed during evaluation")
     artifact_paths = [working_dir / "curves.tsv"]
+    artifact_paths.extend(
+        working_dir / reports[method_id]["filtered_predictions_file"]
+        for method_id, _ in methods
+    )
     artifact_paths.extend(
         working_dir / reports[method_id]["go_resolution_audit_file"]
         for method_id, _ in methods
@@ -441,7 +595,15 @@ def main() -> None:
             "threshold_count": len(thresholds),
         },
         "aspects": list(selected_aspects),
-        "taxids": sorted(set(args.taxid)) if args.taxid else None,
+        "knowledge_classes": (
+            sorted(args.knowledge) if args.knowledge else ["NK", "LK", "PK"]
+        ),
+        "taxids": sorted(taxids) if taxids else None,
+        "cohort_manifest_sha256": _sha(args.cohorts / "manifest.json"),
+        "cohort_table_sha256": cohort_table_sha,
+        "cohort_manifest_schema": cohort_manifest["schema"],
+        "selected_target_aspects": len(selected_eligible),
+        "selected_target_aspect_counts": selected_pair_counts,
         "methods": reports,
         "curve_table": "curves.tsv",
         "plots": plot_inventory,

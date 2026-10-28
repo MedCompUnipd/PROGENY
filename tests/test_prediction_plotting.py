@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from progeny.prediction_plotting import render_metric_svg
+from progeny.prediction_plotting import (
+    render_metric_svg,
+    render_precision_recall_svg,
+)
 
 
 def test_svg_overlays_methods_and_escapes_labels() -> None:
@@ -48,3 +51,19 @@ def test_semantic_axis_scales_to_positive_data() -> None:
     )
     assert "MF — smin" in svg
     assert "4.32" in svg
+
+
+def test_precision_recall_plot_uses_precision_and_recall_coordinates():
+    svg = render_precision_recall_svg(
+        aspect="Molecular Function",
+        series={
+            "method_a": [
+                {"recall": 0.25, "precision": 0.8},
+                {"recall": 0.5, "precision": 0.6},
+            ]
+        },
+    )
+    assert "Precision–Recall" in svg
+    assert "method_a" in svg
+    assert svg.count("<circle") == 2
+    assert 'cx="333.5" cy="146"' in svg
