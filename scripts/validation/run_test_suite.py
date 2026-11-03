@@ -46,6 +46,7 @@ def main() -> int:
             check=True,
         )
         environment = os.environ.copy()
+        environment["TMPDIR"] = temporary
         environment["PROGENY_SOURCE_REPO"] = str(repository)
         environment["PROGENY_DP_BINARY"] = str(
             repository / ".pixi/build/progeny-native-release-gcc14.4/"

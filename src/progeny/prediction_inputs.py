@@ -201,6 +201,22 @@ def load_benchmark_inputs(
         temporal, (*TEMPORAL_FILES, "duplicate_targets.tsv")
     )
     m10c = _read_json(m10c_path)
+    source_payloads = m10c.get("source_payloads")
+    _require(
+        isinstance(source_payloads, dict),
+        "Missing M10C source payload identities",
+    )
+    start_payload = source_payloads.get("START")
+    _require(
+        isinstance(start_payload, dict),
+        "Missing M10C START source payload identity",
+    )
+    normalized_start_gaf_sha256 = start_payload.get("gaf_source_sha256")
+    _require(
+        isinstance(normalized_start_gaf_sha256, str)
+        and bool(re.fullmatch(r"[a-f0-9]{64}", normalized_start_gaf_sha256)),
+        "Missing or invalid M10C START normalized GAF SHA-256",
+    )
     _require(
         temporal_data.get("schema_version") == "stage08-temporal-eval-skip-neutral-v3",
         "Unsupported Temporal schema",
@@ -360,6 +376,7 @@ def load_benchmark_inputs(
         "closure_ignored_cross_aspect_edges": graph.ignored_cross_aspect_edges,
         "temporal_manifest_sha256": _sha(temporal / "manifest.json"),
         "m10c_manifest_sha256": _sha(m10c_path),
+        "m10c_start_normalized_gaf_sha256": normalized_start_gaf_sha256,
         "temporal_class_fingerprint": temporal_data["class_fingerprint"],
         "temporal_registry_fingerprint": temporal_data["registry_fingerprint"],
         "temporal_policy_sha256": temporal_data["policy_sha256"],
