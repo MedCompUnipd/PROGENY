@@ -157,7 +157,7 @@ def _cohort_artifacts(bundle, directory: Path) -> Path:
         "temporal_manifest_sha256": benchmark.provenance["temporal_manifest_sha256"],
         "m10c_manifest_sha256": benchmark.provenance["m10c_manifest_sha256"],
         "start_release": "test-start",
-        "start_gaf_sha256": "a" * 64,
+        "start_gaf_sha256": benchmark.provenance["m10c_start_normalized_gaf_sha256"],
         "eligible_targets": len(benchmark.target_ids),
         "eligible_target_aspects": len(benchmark.eligible),
         "class_counts_by_aspect": class_counts,
@@ -201,6 +201,7 @@ def _cli(bundle, ia_table, ia_manifest, output, methods, *extra):
         "--output-dir",
         str(output),
     ]
+    command.extend(["--start-gaf-sha256", "a" * 64])
     for method_id, path in methods:
         command.extend(["--method", f"{method_id}={path}"])
     command.extend(extra)
@@ -279,6 +280,8 @@ def test_ia_manifest_with_wrong_ontology_is_rejected(bundle, tmp_path):
         str(ia_table),
         "--ia-manifest",
         str(ia_manifest),
+        "--start-gaf-sha256",
+        "a" * 64,
         "--cohorts",
         str(cohorts),
         "--aspect",

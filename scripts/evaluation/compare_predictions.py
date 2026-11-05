@@ -329,6 +329,7 @@ def main() -> None:
     parser.add_argument("--benchmark-sha256")
     parser.add_argument("--ia-table", type=Path)
     parser.add_argument("--ia-manifest", type=Path)
+    parser.add_argument("--start-gaf-sha256")
     parser.add_argument("--cohorts", type=Path)
     parser.add_argument("--method", action="append", required=True)
     parser.add_argument("--threshold-step", default="0.01")
@@ -373,10 +374,16 @@ def main() -> None:
     run = args.run.resolve(strict=True)
     start_spec = dataset / "config/fresh-spec.json"
     start = start_identity(dataset) if start_spec.is_file() else None
-    if start is None and (args.ia_table is None or args.cohorts is None):
+    if start is None and (
+        args.ia_table is None or args.cohorts is None or args.start_gaf_sha256 is None
+    ):
         raise ValueError(
-            "Setup metadata is required to resolve managed evaluation artifacts"
+            "Without setup metadata, supply IA, cohorts, and --start-gaf-sha256"
         )
+    if args.start_gaf_sha256 is not None and not re.fullmatch(
+        r"[a-f0-9]{64}", args.start_gaf_sha256
+    ):
+        raise ValueError("Invalid START GAF SHA-256")
     benchmark_manifest_path = run / "results/benchmark/manifest.json"
     if benchmark_manifest_path.is_symlink() or not benchmark_manifest_path.is_file():
         raise ValueError("Certified benchmark publication is not available")
@@ -422,7 +429,8 @@ def main() -> None:
     )
     if start is not None and (
         cohort_manifest.get("start_release") != start["release_id"]
-        or cohort_manifest.get("start_gaf_sha256") != start["gaf_sha256"]
+        or cohort_manifest.get("start_gaf_sha256")
+        != benchmark.provenance["m10c_start_normalized_gaf_sha256"]
     ):
         raise ValueError("Knowledge cohorts do not match this dataset's START")
     cohort_table_sha = _sha(cohorts_dir / "knowledge_cohorts.tsv")
@@ -460,11 +468,7 @@ def main() -> None:
     expected_release = (
         start["release_id"] if start is not None else cohort_manifest["start_release"]
     )
-    expected_gaf = (
-        start["gaf_sha256"]
-        if start is not None
-        else cohort_manifest["start_gaf_sha256"]
-    )
+    expected_gaf = start["gaf_sha256"] if start is not None else args.start_gaf_sha256
     if (
         ia_manifest.get("source_release_id") != expected_release
         or ia_manifest.get("gaf_sha256") != expected_gaf
