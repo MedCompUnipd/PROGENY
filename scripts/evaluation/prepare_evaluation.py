@@ -21,6 +21,18 @@ from progeny.knowledge_cohorts import load_published_cohorts
 from progeny.prediction_inputs import load_benchmark_inputs
 
 
+def _validate_cohort_start_identity(
+    cohort_manifest: dict, identity: dict, provenance: dict
+) -> None:
+    """Compare cohorts with certified M10C input, not the raw source GOA."""
+    normalized_gaf_sha256 = provenance.get("m10c_start_normalized_gaf_sha256")
+    if (
+        cohort_manifest.get("start_release") != identity["release_id"]
+        or cohort_manifest.get("start_gaf_sha256") != normalized_gaf_sha256
+    ):
+        raise ValueError("Knowledge cohorts do not match this dataset's START")
+
+
 def _build_identity(repository: Path) -> tuple[str, dict]:
     experiment = repository / "experiments/ia_roaring"
     lock = experiment / "vendor/CRoaring.lock.json"
@@ -224,11 +236,7 @@ def prepare(
     cohort_manifest = json.loads(
         (cohorts / "manifest.json").read_text(encoding="utf-8")
     )
-    if (
-        cohort_manifest.get("start_release") != identity["release_id"]
-        or cohort_manifest.get("start_gaf_sha256") != identity["gaf_sha256"]
-    ):
-        raise ValueError("Knowledge cohorts do not match this dataset's START")
+    _validate_cohort_start_identity(cohort_manifest, identity, benchmark.provenance)
     ia_dir = ia_artifact_dir(dataset, identity)
     if ia_dir.absolute().resolve(strict=False) != ia_dir.absolute():
         raise ValueError("IA publication path must not contain symlinks")

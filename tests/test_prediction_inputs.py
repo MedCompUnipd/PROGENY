@@ -13,6 +13,7 @@ from test_alpha_scientific_publish import _ready
 
 from progeny.alpha_scientific_publish import publish_scientific_benchmark
 from progeny.prediction_inputs import load_benchmark_inputs
+from scripts.evaluation.prepare_evaluation import _validate_cohort_start_identity
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -134,6 +135,7 @@ def bundle(tmp_path):
             "graph_terms": 11,
             "graph_edges": 8,
             "not_policy": "preserved_no_veto",
+            "source_payloads": {"START": {"gaf_source_sha256": "e" * 64}},
         },
     )
     publication = publish_scientific_benchmark(dataset, run)
@@ -159,6 +161,21 @@ def _repin(bundle, path):
     bundle["benchmark_sha256"] = _sha(manifest_path)
 
 
+def test_cohorts_match_normalized_m10c_gaf_not_raw_source_gaf():
+    raw_gaf_sha256 = "7" * 64
+    normalized_gaf_sha256 = "6" * 64
+    cohort_manifest = {
+        "start_release": "2023_01",
+        "start_gaf_sha256": normalized_gaf_sha256,
+    }
+    identity = {"release_id": "2023_01", "gaf_sha256": raw_gaf_sha256}
+    provenance = {"m10c_start_normalized_gaf_sha256": normalized_gaf_sha256}
+    _validate_cohort_start_identity(cohort_manifest, identity, provenance)
+    cohort_manifest["start_gaf_sha256"] = raw_gaf_sha256
+    with pytest.raises(ValueError, match="do not match"):
+        _validate_cohort_start_identity(cohort_manifest, identity, provenance)
+
+
 def test_certified_bundle_preserves_full_denominator_without_predictions(bundle):
     inputs = load_benchmark_inputs(**bundle)
     assert inputs.target_ids == frozenset({"T1", "T3"})
@@ -171,6 +188,7 @@ def test_certified_bundle_preserves_full_denominator_without_predictions(bundle)
     assert inputs.graph.ignored_cross_aspect_edges == 0
     assert "GO:0000010" not in inputs.graph.ancestors("GO:0000001")
     assert inputs.provenance["metrics_status"] == "NOT_COMPUTED"
+    assert inputs.provenance["m10c_start_normalized_gaf_sha256"] == "e" * 64
 
 
 def test_real_projection_part_of_masks_regulates_and_original_ids(bundle, tmp_path):
