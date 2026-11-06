@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import random
 import subprocess
@@ -25,7 +26,7 @@ BINARY = os.environ.get("PROGENY_IA_ROARING_BINARY")
 ROOT = "GO:0003674"
 
 
-def gaf_row(protein, term, aspect="F", qualifier="", db="UniProtKB"):
+def gaf_row(protein, term, aspect="F", qualifier="", db="UniProtKB", evidence="IEA"):
     return (
         "\t".join(
             [
@@ -35,7 +36,7 @@ def gaf_row(protein, term, aspect="F", qualifier="", db="UniProtKB"):
                 qualifier,
                 term,
                 "GO_REF:0000002",
-                "IEA",
+                evidence,
                 "",
                 aspect,
                 "name",
@@ -64,7 +65,7 @@ class RoaringEquivalenceTests(unittest.TestCase):
         self.directory = Path(self.temporary.name)
         self.counter = 0
 
-    def compare(self, ontology, lines, *, threads=2):
+    def compare(self, ontology, lines, *, threads=2, evidence_profile="all-positive"):
         self.counter += 1
         directory = self.directory / str(self.counter)
         directory.mkdir()
@@ -79,6 +80,7 @@ class RoaringEquivalenceTests(unittest.TestCase):
             graph=graph,
             scratch_database=directory / "reference.sqlite",
             ontology_sha256="a" * 64,
+            evidence_profile=evidence_profile,
         )
         native = calculate_information_accretion_roaring(
             gaf_path=gaf,
@@ -90,6 +92,7 @@ class RoaringEquivalenceTests(unittest.TestCase):
             binary_path=self.binary,
             threads=threads,
             max_address_space_bytes=2 * 1024**3,
+            evidence_profile=evidence_profile,
         )
         scientific = {k: v for k, v in native.items() if k != "backend"}
         self.assertEqual(reference, scientific)
@@ -104,6 +107,32 @@ class RoaringEquivalenceTests(unittest.TestCase):
             (directory / "roaring.tsv").read_bytes(),
         )
         return native
+
+    def test_evidence_profiles_match_sqlite_oracle_and_zero_counts(self):
+        child = "GO:9000101"
+        absent = "GO:9000102"
+        ontology = GeneOntology(
+            [
+                OntologyTerm(ROOT, namespace="molecular_function"),
+                OntologyTerm(child, namespace="molecular_function"),
+                OntologyTerm(absent, namespace="molecular_function"),
+            ],
+            [(child, "is_a", ROOT), (absent, "is_a", ROOT)],
+        )
+        rows = [
+            gaf_row("a", child, evidence="EXP"),
+            gaf_row("b", child, evidence="TAS"),
+            gaf_row("c", child, evidence="IC"),
+            gaf_row("d", child, evidence="IEA"),
+        ]
+        expected = {"all-positive": 4, "score-experimental": 1, "cafa4-experimental": 3}
+        for profile, count in expected.items():
+            result = self.compare(ontology, rows, evidence_profile=profile)
+            self.assertEqual(result["term_values"][child]["term_count"], count)
+            self.assertEqual(result["term_values"][absent]["term_count"], 0)
+            self.assertAlmostEqual(
+                result["term_values"][absent]["ia"], math.log2(count + 1)
+            )
 
     def test_overlaps_diamond_three_parents_roots_orphans_and_multiple_aspects(self):
         ids = [f"GO:{i:07d}" for i in range(9000001, 9000007)]
@@ -257,6 +286,7 @@ class RoaringEquivalenceTests(unittest.TestCase):
                 str(self.directory / "audit"),
                 "1",
                 str(2 * 1024**3),
+                "all",
             ],
             input=b"",
             capture_output=True,
@@ -282,6 +312,7 @@ class RoaringEquivalenceTests(unittest.TestCase):
                 str(self.directory / "audit"),
                 "1",
                 str(2 * 1024**3),
+                "all",
             ],
             input=b"",
             capture_output=True,

@@ -8,7 +8,7 @@ import json
 import sys
 from pathlib import Path
 
-from progeny.evaluation_artifacts import ia_fingerprint
+from progeny.evaluation_artifacts import IA_PROFILES, ia_fingerprint
 from progeny.information_accretion import write_information_accretion
 from progeny.information_accretion_roaring import (
     calculate_information_accretion_roaring,
@@ -42,6 +42,7 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--max-address-space-gib", type=int, default=128)
+    parser.add_argument("--ia-profile", choices=IA_PROFILES, default="all-positive")
     args = parser.parse_args()
     args.gaf = args.gaf.absolute()
     args.ontology = args.ontology.absolute()
@@ -86,6 +87,7 @@ def main() -> None:
         threads=args.threads,
         max_address_space_bytes=args.max_address_space_gib * 1024**3,
         progress=lambda message: print(message, file=sys.stderr, flush=True),
+        evidence_profile=args.ia_profile,
     )
     if digest_file(args.ontology) != ontology_sha:
         raise ValueError("Ontology changed during calculation")
@@ -104,7 +106,8 @@ def main() -> None:
                     "release_id": args.release_id,
                     "gaf_sha256": args.gaf_sha256.lower(),
                     "ontology_sha256": ontology_sha,
-                }
+                },
+                args.ia_profile,
             ),
         }
     )

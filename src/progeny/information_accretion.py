@@ -14,6 +14,7 @@ from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 
+from progeny.evaluation_artifacts import ia_policy
 from progeny.ontology import GO_ROOTS, GeneOntology, TermStatus
 from progeny.stage08_go_closure import GoClosureIndex
 
@@ -68,10 +69,12 @@ def _parse_gaf(
     connection: sqlite3.Connection,
     expected_sha256: str,
     progress: Callable[[str], None] | None,
+    evidence_profile: str = "all-positive",
 ) -> dict[str, object]:
     digest = hashlib.sha256()
     counts: Counter[str] = Counter()
     evidence_counts: Counter[str] = Counter()
+    selected_codes = ia_policy(evidence_profile).get("evidence_codes")
     resolution_counts: Counter[str] = Counter()
     cross_aspect_replacement_counts: Counter[str] = Counter()
     source_aspect_mismatch_counts: Counter[str] = Counter()
@@ -112,6 +115,9 @@ def _parse_gaf(
                 continue
             counts["positive_rows"] += 1
             evidence_counts[row[6]] += 1
+            if selected_codes is not None and row[6] not in selected_codes:
+                counts["evidence_rows_excluded"] += 1
+                continue
             resolution = ontology.resolve(row[4])
             resolution_counts[resolution.status.value] += 1
             canonical = resolution.canonical_id
@@ -274,6 +280,7 @@ def calculate_information_accretion(
     scratch_database: Path,
     ontology_sha256: str,
     progress: Callable[[str], None] | None = None,
+    evidence_profile: str = "all-positive",
 ) -> dict:
     """Compute smoothed IA values from a positive START-release GAF corpus.
 
@@ -304,6 +311,7 @@ def calculate_information_accretion(
             connection=connection,
             expected_sha256=expected_gaf_sha256,
             progress=progress,
+            evidence_profile=evidence_profile,
         )
         final_stat = gaf_path.stat()
         if (
@@ -369,7 +377,7 @@ def calculate_information_accretion(
                 "status": "COMPUTED",
                 "ontology_sha256": ontology_sha256.lower(),
                 "relations": ["is_a", "part_of"],
-                "evidence_policy": "all_positive_uniprotkb_gaf_rows_including_iea",
+                "evidence_policy": ia_policy(evidence_profile)["evidence_policy"],
                 "not_policy": "exclude_rows_with_NOT_qualifier",
                 "identity_policy": "GAF_database_and_object_id",
                 "go_resolution_policy": (
@@ -391,6 +399,8 @@ def calculate_information_accretion(
                 "term_values": values,
             }
         )
+        if evidence_profile != "all-positive":
+            audit["evidence_codes"] = ia_policy(evidence_profile)["evidence_codes"]
         return audit
     finally:
         connection.close()

@@ -17,6 +17,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 
+from progeny.evaluation_artifacts import ia_policy
 from progeny.information_accretion import IA_SCHEMA, NAMESPACE_ASPECT
 from progeny.ontology import GO_ROOTS, GeneOntology
 from progeny.stage08_go_closure import GoClosureIndex
@@ -130,6 +131,7 @@ def calculate_information_accretion_roaring(
     threads: int = 8,
     max_address_space_bytes: int = 128 * 1024**3,
     progress: Callable[[str], None] | None = None,
+    evidence_profile: str = "all-positive",
 ) -> dict:
     """Compute v3 IA via native bitmap unions and exact parent intersections.
 
@@ -141,6 +143,7 @@ def calculate_information_accretion_roaring(
         if len(value) != 64:
             raise ValueError(f"Invalid {name} SHA-256")
         int(value, 16)
+    selected_policy = ia_policy(evidence_profile)
     if type(threads) is not int or not 1 <= threads <= 64:
         raise ValueError("Threads must be an integer between 1 and 64")
     if (
@@ -173,6 +176,9 @@ def calculate_information_accretion_roaring(
             str(audit_path),
             str(threads),
             str(max_address_space_bytes),
+            ",".join(selected_policy["evidence_codes"])
+            if "evidence_codes" in selected_policy
+            else "all",
         ]
         digest = hashlib.sha256()
         child = subprocess.Popen(
@@ -235,7 +241,7 @@ def calculate_information_accretion_roaring(
                 "gaf_sha256": digest.hexdigest(),
                 "ontology_sha256": ontology_sha256.lower(),
                 "relations": ["is_a", "part_of"],
-                "evidence_policy": "all_positive_uniprotkb_gaf_rows_including_iea",
+                "evidence_policy": selected_policy["evidence_policy"],
                 "not_policy": "exclude_rows_with_NOT_qualifier",
                 "identity_policy": "GAF_database_and_object_id",
                 "go_resolution_policy": (
@@ -267,4 +273,6 @@ def calculate_information_accretion_roaring(
                 },
             }
         )
+        if "evidence_codes" in selected_policy:
+            result["evidence_codes"] = selected_policy["evidence_codes"]
         return result
