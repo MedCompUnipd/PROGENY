@@ -49,7 +49,7 @@ def test_semantic_axis_scales_to_positive_data() -> None:
         ylabel="Smin",
         fixed_unit_range=False,
     )
-    assert "MF — smin" in svg
+    assert "Smin · MF" in svg
     assert "4.32" in svg
 
 
@@ -66,4 +66,30 @@ def test_precision_recall_plot_uses_precision_and_recall_coordinates():
     assert "Precision–Recall" in svg
     assert "method_a" in svg
     assert svg.count("<circle") == 2
-    assert 'cx="333.5" cy="146"' in svg
+    assert 'cx="215" cy="160"' in svg
+
+
+def test_method_lines_have_distinct_styles_in_both_plot_types():
+    metric_svg = render_metric_svg(
+        aspect="MF",
+        metric="f1",
+        series={
+            "alpha": [{"threshold": 0.5, "f1": 0.6}],
+            "beta": [{"threshold": 0.5, "f1": 0.7}],
+        },
+        ylabel="F1",
+        fixed_unit_range=True,
+    )
+    precision_recall_svg = render_precision_recall_svg(
+        aspect="MF",
+        series={
+            "alpha": [{"recall": 0.5, "precision": 0.6}],
+            "beta": [{"recall": 0.5, "precision": 0.7}],
+        },
+    )
+
+    for svg in (metric_svg, precision_recall_svg):
+        assert 'stroke="#0072B2"' in svg
+        assert 'stroke="#D55E00"' in svg
+        assert 'stroke-dasharray="8 4"' in svg
+        assert 'stroke-linecap="round"' in svg
