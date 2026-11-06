@@ -33,6 +33,7 @@ lint = "ruff check ."
 format = "ruff format ."
 check = { depends-on = ["lint", "test"] }
 prepare-evaluation = "python scripts/evaluation/prepare_evaluation.py"
+evaluate-predictions = "python scripts/evaluation/evaluate_predictions.py"
 compare-predictions = "python scripts/evaluation/compare_predictions.py"
 build-release-fasta = "bash scripts/installation/ensure_progeny_native_release.sh progeny-release-fasta-v2"
 release-fasta-v2 = ".pixi/build/progeny-native-release-gcc14.4/progeny-release-fasta-v2"

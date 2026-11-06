@@ -246,7 +246,12 @@ def test_common_grid_outputs_overlay_plots_by_metric_and_aspect(bundle, tmp_path
     assert (output / "plots" / "recall_F.svg").read_text(encoding="utf-8").count(
         "<circle"
     ) > 0
-    assert len(summary["plots"]) == 12
+    assert len(summary["plots"]) == 18
+    assert (output / "plots/micro_f1_F.svg").is_file()
+    for row in rows:
+        assert 0 <= float(row["micro_f1"]) <= 1
+        assert 0 <= float(row["weighted_micro_f1"]) <= 1
+    assert summary["methods"]["alpha"]["unweighted"]["F"]["curve"]
     assert (output / "plots/precision_recall_F.svg").is_file()
     with (output / "filtered_predictions_alpha.tsv").open(
         encoding="utf-8", newline=""

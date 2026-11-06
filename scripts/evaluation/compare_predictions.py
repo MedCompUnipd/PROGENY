@@ -16,14 +16,20 @@ from pathlib import Path
 
 from progeny.alpha_identity import _sha
 from progeny.evaluation_artifacts import (
-    ia_artifact_dir,
+    IA_PROFILES,
     ia_fingerprint,
+    ia_policy,
+    resolve_ia_artifact,
     run_cohort_dir,
     start_identity,
-    validate_ia_artifact,
 )
 from progeny.knowledge_cohorts import load_published_cohorts, select_eligible_pairs
 from progeny.ontology import GO_ROOTS
+from progeny.prediction_exclusions import (
+    apply_exclusions,
+    read_exclusions,
+    verify_exclusions,
+)
 from progeny.prediction_inputs import load_benchmark_inputs
 from progeny.prediction_metrics import evaluate_scores
 from progeny.prediction_plotting import (
@@ -33,7 +39,7 @@ from progeny.prediction_plotting import (
 from progeny.prediction_weighted_metrics import evaluate_weighted_scores
 from progeny.stage08_go_closure import GoClosureIndex
 
-SCHEMA = "progeny-multi-method-evaluation-v2"
+SCHEMA = "progeny-multi-method-evaluation-v3"
 NAMESPACE_ASPECT = {
     "molecular_function": "F",
     "biological_process": "P",
@@ -51,10 +57,16 @@ CURVE_FIELDS = (
     "precision",
     "recall",
     "f1",
+    "micro_precision",
+    "micro_recall",
+    "micro_f1",
     "coverage",
     "weighted_precision",
     "weighted_recall",
     "weighted_f1",
+    "weighted_micro_precision",
+    "weighted_micro_recall",
+    "weighted_micro_f1",
     "weighted_coverage",
     "ru",
     "mi",
@@ -64,10 +76,16 @@ PLOT_METRICS = {
     "precision": ("precision", True),
     "recall": ("recall", True),
     "f1": ("f1", True),
+    "micro_precision": ("micro_precision", True),
+    "micro_recall": ("micro_recall", True),
+    "micro_f1": ("micro_f1", True),
     "coverage": ("coverage", True),
     "weighted_precision": ("weighted_precision", True),
     "weighted_recall": ("weighted_recall", True),
     "weighted_f1": ("weighted_f1", True),
+    "weighted_micro_precision": ("weighted_micro_precision", True),
+    "weighted_micro_recall": ("weighted_micro_recall", True),
+    "weighted_micro_f1": ("weighted_micro_f1", True),
     "weighted_coverage": ("weighted_coverage", True),
     "ru": ("ru", False),
     "mi": ("mi", False),
@@ -84,6 +102,7 @@ IMPLEMENTATION_FILES = (
     "src/progeny/prediction_metrics.py",
     "src/progeny/prediction_inputs.py",
     "src/progeny/prediction_contract.py",
+    "src/progeny/prediction_exclusions.py",
     "src/progeny/knowledge_cohorts.py",
 )
 
@@ -206,6 +225,7 @@ def _read_ia(
     manifest_path: Path,
     ontology_sha256: str,
     graph: GoClosureIndex,
+    profile: str = "all-positive",
 ):
     if any(
         path.absolute() != path.resolve(strict=True) or not path.is_file()
@@ -217,7 +237,7 @@ def _read_ia(
         "schema": "progeny-information-accretion-v3",
         "status": "COMPUTED",
         "source_role": "START",
-        "evidence_policy": "all_positive_uniprotkb_gaf_rows_including_iea",
+        "evidence_policy": ia_policy(profile)["evidence_policy"],
         "go_resolution_policy": (
             "audit_source_namespace_then_follow_only_unambiguous_"
             "replaced_by_to_active_term"
@@ -235,6 +255,8 @@ def _read_ia(
     for key, value in expected.items():
         if manifest.get(key) != value:
             raise ValueError(f"Unsupported IA manifest field: {key}")
+    if manifest.get("evidence_codes") != ia_policy(profile).get("evidence_codes"):
+        raise ValueError("IA evidence codes do not match the selected profile")
     audit_fields = (
         (
             "cross_aspect_replacement_rows_excluded",
@@ -322,7 +344,17 @@ def _audit_path(directory: Path, method_id: str) -> Path:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=(
+            "IA uses uniform +1 smoothing; zero term and parent counts give IA 0. "
+            "A zero term count with positive parent count gives log2(parent+1). "
+            "For --exclude-go, a file with GO:0005488 and GO:0005515 on "
+            "separate lines filters those exact terms after propagation. "
+            "This differs from excluding direct annotations before CAFA4 "
+            "propagation; full CAFA parity requires independent comparison."
+        ),
+    )
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--run", type=Path, required=True)
     parser.add_argument("--ontology", type=Path)
@@ -337,6 +369,32 @@ def main() -> None:
     parser.add_argument("--knowledge", type=_knowledge_filter, default=None)
     parser.add_argument("--taxid", action="append")
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--propagation",
+        choices=("max", "fill"),
+        default="max",
+        help=(
+            "max raises ancestor scores; fill keeps positive "
+            "ancestor scores and fills zeros from children"
+        ),
+    )
+    parser.add_argument(
+        "--ia-profile",
+        choices=IA_PROFILES,
+        default="all-positive",
+        help=(
+            "all-positive includes IEA; score-experimental uses 11 SCORE "
+            "codes; cafa4-experimental adds TAS and IC"
+        ),
+    )
+    parser.add_argument(
+        "--exclude-go",
+        type=Path,
+        help=(
+            "one active GO ID per line; symmetric exclusion "
+            "after propagation, without descendants"
+        ),
+    )
     args = parser.parse_args()
     if (args.ia_table is None) != (args.ia_manifest is None):
         parser.error("--ia-table and --ia-manifest must be supplied together")
@@ -402,14 +460,14 @@ def main() -> None:
         benchmark_sha256=benchmark_sha,
     )
     if args.ia_table is None:
-        ia_dir = ia_artifact_dir(dataset, start)
         try:
-            ia_table, ia_manifest_path = validate_ia_artifact(ia_dir, start)
+            _, ia_table, ia_manifest_path = resolve_ia_artifact(
+                dataset, start, args.ia_profile
+            )
         except (OSError, ValueError) as exc:
             raise ValueError(
                 "A matching START Information Accretion artifact is required. "
-                "Run `pixi run prepare-evaluation --dataset DATASET --run RUN` "
-                "before evaluating predictions."
+                "Prepare the selected IA profile explicitly before evaluation."
             ) from exc
     else:
         ia_table = args.ia_table
@@ -445,7 +503,16 @@ def main() -> None:
         species=benchmark.species,
         taxids=taxids,
     )
-    selected_truth = {key: benchmark.truth[key] for key in selected_eligible}
+    eligible_before_go_filter = selected_eligible
+    truth_before_go_filter = {
+        key: benchmark.truth[key] for key in eligible_before_go_filter
+    }
+    exclusion = read_exclusions(args.exclude_go, benchmark.graph)
+    selected_eligible, selected_truth, _, truth_exclusion_audit = apply_exclusions(
+        eligible_before_go_filter, truth_before_go_filter, {}, exclusion
+    )
+    truth_exclusion_audit.pop("prediction_pairs_before")
+    truth_exclusion_audit.pop("prediction_pairs_after")
     selected_pair_counts = {
         "by_aspect": {
             aspect: sum(key[1] == aspect for key in selected_eligible)
@@ -464,6 +531,7 @@ def main() -> None:
         ia_manifest_path,
         benchmark.provenance["ontology_sha256"],
         benchmark.graph,
+        args.ia_profile,
     )
     expected_release = (
         start["release_id"] if start is not None else cohort_manifest["start_release"]
@@ -480,7 +548,10 @@ def main() -> None:
             raise ValueError(
                 "Setup metadata is required to verify the IA artifact fingerprint"
             )
-        if fingerprint != ia_fingerprint(start):
+        accepted = {ia_fingerprint(start, args.ia_profile)}
+        if args.ia_profile == "all-positive":
+            accepted.add(ia_fingerprint(start, legacy=True))
+        if fingerprint not in accepted:
             raise ValueError("IA artifact fingerprint does not match this installation")
     ia_table_sha = ia_manifest["ia_table_sha256"]
     if _sha(ia_manifest_path) != ia_manifest_sha:
@@ -502,12 +573,18 @@ def main() -> None:
         if raw_path.absolute() != prediction_path or not prediction_path.is_file():
             raise ValueError(f"Prediction file is not a regular file: {raw_path}")
         prediction_sha = _digest(prediction_path)
-        prepared = benchmark.prepare(prediction_path)
+        prepared = benchmark.prepare(prediction_path, propagation=args.propagation)
         filtered_scores = {
             key: score
             for key, score in prepared.scores.items()
-            if key[:2] in selected_eligible
+            if key[:2] in eligible_before_go_filter
         }
+        _, _, filtered_scores, method_exclusion_audit = apply_exclusions(
+            eligible_before_go_filter,
+            truth_before_go_filter,
+            filtered_scores,
+            exclusion,
+        )
         unweighted = evaluate_scores(
             eligible=selected_eligible,
             truth=selected_truth,
@@ -533,15 +610,10 @@ def main() -> None:
             "prediction_path": str(prediction_path),
             "prediction_sha256": prediction_sha,
             "preparation_counts": prepared.counts,
+            "go_exclusion_counts": method_exclusion_audit,
             "selected_scoring_target_aspects": len(selected_eligible),
-            "unweighted": {
-                aspect: {key: value for key, value in report.items() if key != "curve"}
-                for aspect, report in unweighted["aspects"].items()
-            },
-            "weighted": {
-                aspect: {key: value for key, value in report.items() if key != "curve"}
-                for aspect, report in weighted.items()
-            },
+            "unweighted": unweighted["aspects"],
+            "weighted": weighted,
         }
         input_fingerprints[method_id] = prediction_sha
         audit_path = _audit_path(working_dir, method_id)
@@ -585,10 +657,18 @@ def main() -> None:
                     "precision": raw_point["precision"],
                     "recall": raw_point["recall_full"],
                     "f1": raw_point["f1_full"],
+                    "micro_precision": raw_point["micro_precision"],
+                    "micro_recall": raw_point["micro_recall"],
+                    "micro_f1": raw_point["micro_f1"],
                     "coverage": raw_point["coverage"],
                     "weighted_precision": weighted_point["weighted_precision"],
                     "weighted_recall": weighted_point["weighted_recall"],
                     "weighted_f1": weighted_point["weighted_f1"],
+                    "weighted_micro_precision": weighted_point[
+                        "weighted_micro_precision"
+                    ],
+                    "weighted_micro_recall": weighted_point["weighted_micro_recall"],
+                    "weighted_micro_f1": weighted_point["weighted_micro_f1"],
                     "weighted_coverage": weighted_point["weighted_coverage"],
                     "ru": weighted_point["ru"],
                     "mi": weighted_point["mi"],
@@ -667,6 +747,10 @@ def main() -> None:
         "ia_source_role": ia_manifest["source_role"],
         "ia_source_release_id": ia_manifest["source_release_id"],
         "ia_source_gaf_sha256": ia_manifest["gaf_sha256"],
+        "ia_profile": args.ia_profile,
+        "ia_policy": ia_policy(args.ia_profile),
+        "propagation_policy": args.propagation,
+        "go_exclusions": truth_exclusion_audit,
         "threshold_profile": {
             "name": "CAFA_FIXED_GRID",
             "step": args.threshold_step,
@@ -710,6 +794,7 @@ def main() -> None:
         for digest in [input_fingerprints[method]]
     ):
         raise ValueError("A method prediction file changed before report completion")
+    verify_exclusions(exclusion)
     if output_dir.exists():
         raise ValueError("Evaluation output directory appeared during calculation")
     working_dir.rename(output_dir)
