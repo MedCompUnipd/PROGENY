@@ -14,7 +14,7 @@ from numbers import Real
 
 from progeny.prediction_contract import ASPECTS, GO_ID, ROOTS, Pair, TermKey
 
-SCHEMA = "progeny-prediction-macro-metrics-v1"
+SCHEMA = "progeny-prediction-metrics-v2"
 ASPECT_ORDER = ("F", "P", "C")
 MAX_GRID_POINTS = 10001
 
@@ -154,6 +154,12 @@ def _aspect_metrics(
                     "f1_full": _harmonic(precision, recall_full),
                     "recall_covered": recall_covered,
                     "f1_covered": _harmonic(precision, recall_covered),
+                    "micro_precision": _ratio(total_tp, total_predictions),
+                    "micro_recall": _ratio(total_tp, truth_terms),
+                    "micro_f1": _harmonic(
+                        _ratio(total_tp, total_predictions),
+                        _ratio(total_tp, truth_terms),
+                    ),
                 }
             )
     any_covered = len({query for _, query, _ in events})
@@ -174,7 +180,23 @@ def _aspect_metrics(
         "thresholds_examined": len(curve),
         "full": _best(curve, covered=False),
         "covered_normalization_secondary": _best(curve, covered=True),
+        "micro": {
+            "fmax": _best_micro(curve),
+            "normalization": "pooled_target_go_pairs",
+        },
         "curve": curve,
+    }
+
+
+def _best_micro(curve: list[dict]) -> dict:
+    if not curve:
+        return {"fmax": None, "threshold": None, "precision": None, "recall": None}
+    point = max(curve, key=lambda row: (row["micro_f1"], row["threshold"]))
+    return {
+        "fmax": point["micro_f1"],
+        "threshold": point["threshold"],
+        "precision": point["micro_precision"],
+        "recall": point["micro_recall"],
     }
 
 

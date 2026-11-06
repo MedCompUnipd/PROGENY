@@ -165,7 +165,10 @@ def evaluate_weighted_scores(
         precision_sum = _CompensatedSum()
         recall_sum = _CompensatedSum()
         false_negative_sum = math.fsum(truth_weight.values())
+        total_truth_weight = false_negative_sum
         false_positive_sum = 0.0
+        total_prediction_weight = 0.0
+        total_true_weight = 0.0
         covered = 0
         unweighted_covered = 0
         position = 0
@@ -188,6 +191,8 @@ def evaluate_weighted_scores(
                 old_true = true_positive[query]
                 old_precision = old_true / old_prediction if old_prediction else 0.0
                 predictions[query] += added_prediction
+                total_prediction_weight += added_prediction
+                total_true_weight += added_true
                 unweighted_predictions[query] += int(added_count)
                 true_positive[query] += added_true
                 if old_prediction == 0 and predictions[query] > 0:
@@ -214,12 +219,23 @@ def evaluate_weighted_scores(
                 raise ArithmeticError("Weighted false negatives became negative")
             ru = max(0.0, false_negative_sum) / population if population else None
             mi = false_positive_sum / population if population else None
+            micro_precision = _unit(
+                total_true_weight / total_prediction_weight
+                if total_prediction_weight
+                else 0.0
+            )
+            micro_recall = _unit(
+                total_true_weight / total_truth_weight if total_truth_weight else 0.0
+            )
             curve.append(
                 {
                     "threshold": threshold,
                     "weighted_precision": weighted_precision,
                     "weighted_recall": weighted_recall,
                     "weighted_f1": _harmonic(weighted_precision, weighted_recall),
+                    "weighted_micro_precision": micro_precision,
+                    "weighted_micro_recall": micro_recall,
+                    "weighted_micro_f1": _harmonic(micro_precision, micro_recall),
                     "weighted_coverage": covered / population if population else None,
                     "weighted_covered_targets": covered,
                     "scorable_targets": unweighted_covered,
@@ -244,6 +260,11 @@ def evaluate_weighted_scores(
             "truth_ia_sum": math.fsum(truth_weight.values()),
             "weighted_fmax": (
                 _best(scorable_curve, "weighted_f1", maximize=True)
+                if scorable_curve
+                else {"value": None, "threshold": None}
+            ),
+            "weighted_micro_fmax": (
+                _best(scorable_curve, "weighted_micro_f1", maximize=True)
                 if scorable_curve
                 else {"value": None, "threshold": None}
             ),

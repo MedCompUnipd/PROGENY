@@ -104,7 +104,9 @@ class BenchmarkInputs:
             candidates=resolution.candidates,
         )
 
-    def prepare(self, predictions: Path) -> PreparedPredictions:
+    def prepare(
+        self, predictions: Path, *, propagation: str = "max"
+    ) -> PreparedPredictions:
         return prepare_predictions(
             read_predictions(predictions),
             target_ids=self.target_ids,
@@ -113,6 +115,8 @@ class BenchmarkInputs:
             resolve=self.resolve_prediction,
             aspect=self.aspect,
             ancestors=self.graph.ancestors,
+            direct_parents=self.graph.direct_parents,
+            propagation=propagation,
         )
 
 
