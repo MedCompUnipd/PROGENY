@@ -15,10 +15,15 @@ from importlib.metadata import version
 from pathlib import Path
 
 from progeny.alpha_identity import _sha
+from progeny.prediction_exclusions import (
+    apply_exclusions,
+    read_exclusions,
+    verify_exclusions,
+)
 from progeny.prediction_inputs import load_benchmark_inputs
 from progeny.prediction_metrics import evaluate_scores, threshold_grid
 
-SCHEMA = "progeny-prediction-evaluation-v1"
+SCHEMA = "progeny-prediction-evaluation-v2"
 
 
 def _implementation(repo: Path) -> dict:
@@ -26,6 +31,7 @@ def _implementation(repo: Path) -> dict:
         "scripts/evaluation/evaluate_predictions.py",
         "src/progeny/prediction_metrics.py",
         "src/progeny/prediction_contract.py",
+        "src/progeny/prediction_exclusions.py",
         "src/progeny/prediction_inputs.py",
         "src/progeny/ontology.py",
         "src/progeny/parsing/owl.py",
@@ -48,7 +54,15 @@ def _git_head(repo: Path) -> str | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=(
+            "Scores are propagated before GO exclusions. A file with "
+            "GO:0005488 and GO:0005515 on separate lines filters those "
+            "exact terms on both sides, without descendants. This need not "
+            "equal CAFA4 filtering of direct annotations before propagation."
+        ),
+    )
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--run", type=Path, required=True)
     parser.add_argument("--ontology", type=Path, required=True)
@@ -60,6 +74,23 @@ def main() -> None:
     parser.add_argument("--taxid", action="append")
     parser.add_argument("--threshold-step")
     parser.add_argument("--include-curves", action="store_true")
+    parser.add_argument(
+        "--propagation",
+        choices=("max", "fill"),
+        default="max",
+        help=(
+            "max raises ancestor scores; fill preserves "
+            "positive ancestor scores and fills zeros"
+        ),
+    )
+    parser.add_argument(
+        "--exclude-go",
+        type=Path,
+        help=(
+            "one active GO ID per line; symmetric exclusion "
+            "after propagation without descendants"
+        ),
+    )
     args = parser.parse_args()
     if not args.method_id or any(value.isspace() for value in args.method_id):
         parser.error("method-id must be nonempty and contain no whitespace")
@@ -84,11 +115,15 @@ def main() -> None:
         benchmark_sha256=args.benchmark_sha256,
     )
     prediction_digest = _sha(args.predictions)
-    prepared = benchmark.prepare(args.predictions)
+    prepared = benchmark.prepare(args.predictions, propagation=args.propagation)
+    exclusion = read_exclusions(args.exclude_go, benchmark.graph)
+    eligible, truth, scores, exclusion_audit = apply_exclusions(
+        benchmark.eligible, benchmark.truth, prepared.scores, exclusion
+    )
     metrics = evaluate_scores(
-        eligible=benchmark.eligible,
-        truth=benchmark.truth,
-        scores=prepared.scores,
+        eligible=eligible,
+        truth=truth,
+        scores=scores,
         species=benchmark.species,
         aspects=tuple(args.aspect) if args.aspect is not None else ("F", "P", "C"),
         taxids=frozenset(args.taxid) if args.taxid is not None else None,
@@ -130,6 +165,8 @@ def main() -> None:
             "preparation_counts": prepared.counts,
             "go_resolution_audit": prepared.go_audit,
         },
+        "propagation_policy": args.propagation,
+        "go_exclusions": exclusion_audit,
         "threshold_grid_step": args.threshold_step,
         "curves_included": args.include_curves,
         "metrics": metrics,
@@ -138,6 +175,7 @@ def main() -> None:
         "python_version": platform.python_version(),
         "rdflib_version": version("rdflib"),
     }
+    verify_exclusions(exclusion)
     print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
 
 

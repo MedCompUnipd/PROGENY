@@ -12,7 +12,9 @@ from pathlib import Path
 
 from progeny.alpha_identity import _sha
 from progeny.evaluation_artifacts import (
+    IA_PROFILES,
     ia_artifact_dir,
+    resolve_ia_artifact,
     shared_artifacts_root,
     start_identity,
     validate_ia_artifact,
@@ -181,6 +183,8 @@ def prepare(
     jobs: int = 2,
     threads: int = 8,
     max_address_space_gib: int = 128,
+    ia_profile: str = "all-positive",
+    compute_ia: bool = False,
 ) -> dict:
     repository = Path(__file__).resolve().parents[2]
     resolved_dataset = dataset.resolve(strict=True)
@@ -237,17 +241,27 @@ def prepare(
         (cohorts / "manifest.json").read_text(encoding="utf-8")
     )
     _validate_cohort_start_identity(cohort_manifest, identity, benchmark.provenance)
-    ia_dir = ia_artifact_dir(dataset, identity)
+    ia_dir = ia_artifact_dir(dataset, identity, ia_profile)
     if ia_dir.absolute().resolve(strict=False) != ia_dir.absolute():
         raise ValueError("IA publication path must not contain symlinks")
-    if ia_dir.exists():
-        table, manifest = validate_ia_artifact(ia_dir, identity)
+    try:
+        ia_dir, table, manifest = resolve_ia_artifact(dataset, identity, ia_profile)
         print(f"INFORMATION_ACCRETION=REUSED TABLE={table} MANIFEST={manifest}")
-    else:
+    except ValueError as exc:
+        if ia_dir.exists() or (
+            ia_profile == "all-positive"
+            and ia_artifact_dir(dataset, identity, legacy=True).exists()
+        ):
+            raise
+        if not compute_ia:
+            raise ValueError(
+                "No matching IA artifact; pass --compute-ia to explicitly "
+                "calculate the full START corpus"
+            ) from exc
         binary = _ensure_native(repository, store, jobs)
         scratch_root = store / "scratch/ia-roaring"
         if scratch_root.absolute().resolve(strict=False) != scratch_root.absolute():
-            raise ValueError("IA scratch path must not contain symlinks")
+            raise ValueError("IA scratch path must not contain symlinks") from exc
         scratch_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         ia_dir.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         command = [
@@ -278,9 +292,11 @@ def prepare(
             str(threads),
             "--max-address-space-gib",
             str(max_address_space_gib),
+            "--ia-profile",
+            ia_profile,
         ]
         subprocess.run(command, cwd=repository, check=True)
-        table, manifest = validate_ia_artifact(ia_dir, identity)
+        table, manifest = validate_ia_artifact(ia_dir, identity, ia_profile)
         print(f"INFORMATION_ACCRETION=COMPUTED TABLE={table} MANIFEST={manifest}")
     return {
         "status": "READY",
@@ -288,17 +304,28 @@ def prepare(
         "ia_table": str(table),
         "ia_manifest": str(manifest),
         "ia_fingerprint": ia_dir.name,
+        "ia_profile": ia_profile,
         "knowledge_cohorts": str(cohorts),
     }
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=(
+            "all-positive includes IEA; score-experimental admits the 11 "
+            "PROGENY SCORE evidence codes; cafa4-experimental adds TAS and IC. "
+            "All profiles use uniform +1 smoothing, including zero counts. "
+            "A missing IA artifact requires explicit --compute-ia."
+        ),
+    )
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--run", type=Path, required=True)
     parser.add_argument("--jobs", type=int, default=2)
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--max-address-space-gib", type=int, default=128)
+    parser.add_argument("--ia-profile", choices=IA_PROFILES, default="all-positive")
+    parser.add_argument("--compute-ia", action="store_true")
     args = parser.parse_args()
     if not 1 <= args.jobs <= 16:
         parser.error("--jobs must be between 1 and 16")
@@ -312,6 +339,8 @@ def main() -> None:
         jobs=args.jobs,
         threads=args.threads,
         max_address_space_gib=args.max_address_space_gib,
+        ia_profile=args.ia_profile,
+        compute_ia=args.compute_ia,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 

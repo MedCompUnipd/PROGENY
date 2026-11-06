@@ -27,6 +27,64 @@ IA_POLICY = {
     "smoothing": "one_synthetic_protein_annotated_to_every_active_term",
     "formula": "log2((count_all_direct_parents+1)/(count_term+1))",
 }
+IA_PROFILES = ("all-positive", "score-experimental", "cafa4-experimental")
+SCORE_CODES = (
+    "EXP",
+    "HDA",
+    "HEP",
+    "HGI",
+    "HMP",
+    "HTP",
+    "IDA",
+    "IEP",
+    "IGI",
+    "IMP",
+    "IPI",
+)
+
+
+def ia_policy(profile: str = "all-positive") -> dict:
+    if profile not in IA_PROFILES:
+        raise ValueError(f"Unsupported IA profile: {profile}")
+    policy = dict(IA_POLICY)
+    if profile != "all-positive":
+        extra = ("TAS", "IC") if profile == "cafa4-experimental" else ()
+        codes = sorted((*SCORE_CODES, *extra))
+        policy["evidence_policy"] = profile
+        policy["evidence_codes"] = codes
+    return policy
+
+
+# The published v3 all-positive builder identity, pinned before policy support.
+LEGACY_IA_IMPLEMENTATION = dict(
+    zip(
+        (
+            "src/progeny/evaluation_artifacts.py",
+            "src/progeny/information_accretion_roaring.py",
+            "src/progeny/information_accretion.py",
+            "src/progeny/ontology.py",
+            "src/progeny/stage08_go_closure.py",
+            "scripts/evaluation/compute_information_accretion_roaring.py",
+            "experiments/ia_roaring/CMakeLists.txt",
+            "experiments/ia_roaring/src/main.cpp",
+            "experiments/ia_roaring/vendor/CRoaring.lock.json",
+            "pixi.lock",
+        ),
+        (
+            "39c8c9a377c970b472ca7b04c22af5aba92a8a0885379bd17c64ee44dbf91811",
+            "77b28f224929782d9c7460b9494f54289e78024acd24226eb17a4dd2148bb6b7",
+            "0e62fc24741c66361f9fb9e0cc971c88a467f85197b15244da0173157901d848",
+            "04eb9409eb17402ac225f19869b10db9ff9ef26f3fcc01f0c7eac180a5ba7ace",
+            "0edf51a1cbff2ca0eccda63b863f5836b481bb4cc424dcc9f856037452119393",
+            "ea64f84b457ea1b2e1d8e22695072e0f5e7dfb35207a63bc0c2599d81a733265",
+            "ff0c2a56b4a75bc361f91dc27bc289aec24f200b4d1c167837e83ebabf7ddb41",
+            "daa6a1659a1755bddbbfa6d23e7ad00fcb21e6f2b88ecec70e46e6d73bfa6a87",
+            "9b9a16e1352b2f7b3b027c23b4b01dde8b59c0123abc20b87278e222c937b255",
+            "f47af9d719a332d87f2a40843e04d48e0de96c8151183ba0ea358414efe62600",
+        ),
+        strict=True,
+    )
+)
 
 
 def sha256_file(path: Path) -> str:
@@ -122,7 +180,11 @@ def start_identity(dataset: Path) -> dict:
     }
 
 
-def ia_fingerprint(identity: dict) -> str:
+def ia_fingerprint(
+    identity: dict, profile: str = "all-positive", *, legacy: bool = False
+) -> str:
+    if legacy and profile != "all-positive":
+        raise ValueError("Only all-positive has a legacy artifact identity")
     repository = Path(__file__).resolve().parents[2]
     implementation_paths = (
         "src/progeny/evaluation_artifacts.py",
@@ -141,22 +203,30 @@ def ia_fingerprint(identity: dict) -> str:
         "release_id": identity["release_id"],
         "gaf_sha256": identity["gaf_sha256"],
         "ontology_sha256": identity["ontology_sha256"],
-        "policy": IA_POLICY,
-        "implementation_sha256": {
-            name: sha256_file(repository / name) for name in implementation_paths
-        },
+        "policy": ia_policy(profile),
+        "implementation_sha256": (
+            LEGACY_IA_IMPLEMENTATION
+            if legacy
+            else {name: sha256_file(repository / name) for name in implementation_paths}
+        ),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
-def ia_artifact_dir(dataset: Path, identity: dict) -> Path:
+def ia_artifact_dir(
+    dataset: Path,
+    identity: dict,
+    profile: str = "all-positive",
+    *,
+    legacy: bool = False,
+) -> Path:
     return (
         shared_artifacts_root(dataset)
         / "START"
         / identity["release_id"]
         / "information_accretion"
-        / ia_fingerprint(identity)
+        / ia_fingerprint(identity, profile, legacy=legacy)
     )
 
 
@@ -172,7 +242,13 @@ def run_cohort_dir(dataset: Path, run: Path, benchmark_sha256: str) -> Path:
     )
 
 
-def validate_ia_artifact(directory: Path, identity: dict) -> tuple[Path, Path]:
+def validate_ia_artifact(
+    directory: Path,
+    identity: dict,
+    profile: str = "all-positive",
+    *,
+    legacy: bool = False,
+) -> tuple[Path, Path]:
     table = directory / "information_accretion.tsv"
     manifest_path = directory / "manifest.json"
     if (
@@ -186,7 +262,8 @@ def validate_ia_artifact(directory: Path, identity: dict) -> tuple[Path, Path]:
         "manifest.json",
     }:
         raise ValueError("IA publication file inventory is unexpected")
-    if directory.name != ia_fingerprint(identity):
+    fingerprint = ia_fingerprint(identity, profile, legacy=legacy)
+    if directory.name != fingerprint:
         raise ValueError("IA artifact directory fingerprint is inconsistent")
     for path in (table, manifest_path):
         if path.is_symlink() or not path.is_file():
@@ -199,13 +276,34 @@ def validate_ia_artifact(directory: Path, identity: dict) -> tuple[Path, Path]:
         or manifest.get("source_release_id") != identity["release_id"]
         or manifest.get("gaf_sha256") != identity["gaf_sha256"]
         or manifest.get("ontology_sha256") != identity["ontology_sha256"]
-        or manifest.get("artifact_fingerprint") != ia_fingerprint(identity)
+        or manifest.get("artifact_fingerprint") != fingerprint
         or manifest.get("ia_table_sha256") != sha256_file(table)
     ):
         raise ValueError("IA publication does not match the configured START identity")
-    for key, value in IA_POLICY.items():
+    for key, value in ia_policy(profile).items():
         if key == "schema":
             continue
         if manifest.get(key) != value:
             raise ValueError(f"IA publication policy mismatch: {key}")
+    if profile == "all-positive" and "evidence_codes" in manifest:
+        raise ValueError("All-positive IA must not carry an evidence-code filter")
+    if legacy and any(
+        manifest.get("implementation_sha256", {}).get(name) != digest
+        for name, digest in LEGACY_IA_IMPLEMENTATION.items()
+        if name.startswith("src/") or name.startswith("scripts/")
+    ):
+        raise ValueError("Legacy IA implementation identity mismatch")
     return table, manifest_path
+
+
+def resolve_ia_artifact(
+    dataset: Path, identity: dict, profile: str = "all-positive"
+) -> tuple[Path, Path, Path]:
+    directory = ia_artifact_dir(dataset, identity, profile)
+    if directory.exists():
+        return directory, *validate_ia_artifact(directory, identity, profile)
+    if profile == "all-positive":
+        legacy = ia_artifact_dir(dataset, identity, profile, legacy=True)
+        if legacy.exists():
+            return legacy, *validate_ia_artifact(legacy, identity, profile, legacy=True)
+    raise ValueError("Matching START IA artifact is unavailable")

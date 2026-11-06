@@ -14,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <queue>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -70,9 +71,15 @@ std::uint64_t number(const std::string& s) {
     return value;
 }
 int run(int argc,char** argv) {
-    if(argc!=7)throw std::runtime_error("usage: engine GRAPH POLICY COUNTS AUDIT THREADS MAX_ADDRESS_BYTES (GAF on stdin)");
+    if(argc!=8)throw std::runtime_error("usage: engine GRAPH POLICY COUNTS AUDIT THREADS MAX_ADDRESS_BYTES EVIDENCE_CODES (GAF on stdin)");
     if(std::filesystem::exists(argv[3])||std::filesystem::exists(argv[4]))throw std::runtime_error("output already exists");
     auto threads=number(argv[5]);auto memory=number(argv[6]);
+    std::set<std::string> selected_codes;
+    if(std::string(argv[7])!="all") {
+        for(const auto& code:split(argv[7],',')) {
+            if(code.empty()||!selected_codes.insert(code).second)throw std::runtime_error("invalid evidence code policy");
+        }
+    }
     if(threads<1||threads>64||memory<64*1024*1024ULL)throw std::runtime_error("invalid resource limit");
     rlimit old{};if(getrlimit(RLIMIT_AS,&old))throw std::runtime_error("getrlimit failed");
     rlimit limit{static_cast<rlim_t>(memory),old.rlim_max};
@@ -141,6 +148,7 @@ int run(int argc,char** argv) {
         minimum=std::min(minimum,std::string(f[13]));maximum=std::max(maximum,std::string(f[13]));
         if(has_not(f[3])) {++counts["not_rows_excluded"];continue;}
         ++counts["positive_rows"];++evidence[std::string(f[6])];
+        if(!selected_codes.empty()&&!selected_codes.contains(std::string(f[6]))) {++counts["evidence_rows_excluded"];continue;}
         auto it=policy.find(std::string(f[4]));
         Policy unknown{"","unknown",""};const auto& p=it==policy.end()?unknown:it->second;
         ++resolutions[p.status];

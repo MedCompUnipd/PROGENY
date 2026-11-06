@@ -19,6 +19,7 @@ GO_ID = re.compile(r"GO:[0-9]{7}\Z")
 ASPECTS = frozenset({"F", "P", "C"})
 ROOTS = frozenset({"GO:0003674", "GO:0008150", "GO:0005575"})
 PREPARATION_SCHEMA = "progeny-prediction-preparation-v1"
+PROPAGATION_MODES = frozenset({"max", "fill"})
 Pair = tuple[str, str]
 TermKey = tuple[str, str, str]
 
@@ -84,6 +85,40 @@ def read_predictions(path: Path) -> Iterable[Prediction]:
             yield Prediction(query, go, score)
 
 
+def _fill_closure_scores(
+    supplied: Mapping[str, float],
+    closure: set[str],
+    direct_parents: Callable[[str], Iterable[str]],
+) -> dict[str, float]:
+    children: dict[str, set[str]] = {go: set() for go in closure}
+    for go in closure:
+        for parent in direct_parents(go):
+            if parent in closure:
+                children[parent].add(go)
+    computed: dict[str, float] = {}
+    visiting: set[str] = set()
+
+    def score_for(go: str) -> float:
+        if go in computed:
+            return computed[go]
+        if go in visiting:
+            raise ValueError("Cycle in prediction closure")
+        visiting.add(go)
+        own = supplied.get(go, 0.0)
+        value = (
+            own
+            if own > 0
+            else max((score_for(child) for child in children[go]), default=0.0)
+        )
+        visiting.remove(go)
+        computed[go] = value
+        return value
+
+    for go in sorted(closure):
+        score_for(go)
+    return computed
+
+
 def prepare_predictions(
     records: Iterable[Prediction],
     *,
@@ -93,6 +128,8 @@ def prepare_predictions(
     resolve: Callable[[str], GoResolution],
     aspect: Callable[[str], str],
     ancestors: Callable[[str], Iterable[str]],
+    direct_parents: Callable[[str], Iterable[str]] | None = None,
+    propagation: str = "max",
 ) -> PreparedPredictions:
     """Canonicalize, merge max, propagate max, then mask per target/aspect.
 
@@ -102,6 +139,10 @@ def prepare_predictions(
     Syntactically valid GO IDs without an active mapping are excluded before
     propagation, with a row audit. They never establish target eligibility.
     """
+    if propagation not in PROPAGATION_MODES or (
+        propagation == "fill" and direct_parents is None
+    ):
+        raise ValueError("Propagation must be max or fill with direct parents")
     if any(
         query not in target_ids or value not in ASPECTS for query, value in eligible
     ):
@@ -189,14 +230,26 @@ def prepare_predictions(
             direct[key] = record.score
     counts["canonical_pairs"] = len(direct)
     propagated: dict[TermKey, float] = {}
-    for (query, go), score in direct.items():
-        source_aspect = aspect(go)
-        closure = set(ancestors(go)) | {go}
-        for parent in closure:
-            if aspect(parent) != source_aspect:
+    if propagation == "max":
+        for (query, go), score in direct.items():
+            source_aspect = aspect(go)
+            for parent in set(ancestors(go)) | {go}:
+                if aspect(parent) != source_aspect:
+                    raise ValueError("Cross-aspect term in prediction closure")
+                key = query, source_aspect, parent
+                propagated[key] = max(propagated.get(key, score), score)
+    else:
+        by_query: dict[tuple[str, str], dict[str, float]] = {}
+        for (query, go), score in direct.items():
+            by_query.setdefault((query, aspect(go)), {})[go] = score
+        for (query, source_aspect), supplied in by_query.items():
+            closure = set().union(*(set(ancestors(go)) | {go} for go in supplied))
+            if any(aspect(go) != source_aspect for go in closure):
                 raise ValueError("Cross-aspect term in prediction closure")
-            key = query, source_aspect, parent
-            propagated[key] = max(propagated.get(key, score), score)
+            for go, score in _fill_closure_scores(
+                supplied, closure, direct_parents
+            ).items():
+                propagated[query, source_aspect, go] = score
     counts["propagated_pairs"] = len(propagated)
     result = {}
     for key, score in propagated.items():

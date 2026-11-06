@@ -11,6 +11,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from progeny.evaluation_artifacts import IA_PROFILES
 from progeny.information_accretion import (
     calculate_information_accretion,
     write_information_accretion,
@@ -51,6 +52,7 @@ def main() -> None:
     parser.add_argument("--ontology-sha256", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--scratch-root", type=Path, required=True)
+    parser.add_argument("--ia-profile", choices=IA_PROFILES, default="all-positive")
     args = parser.parse_args()
 
     repository = Path(__file__).resolve().parents[2]
@@ -120,6 +122,7 @@ def main() -> None:
             scratch_database=database,
             ontology_sha256=ontology_digest,
             progress=report_progress,
+            evidence_profile=args.ia_profile,
         )
         result["source_role"] = args.source_role
         result["source_release_id"] = args.release_id
